@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - path: ./team_08.env
+        format: raw
+    environment:
+      HANA_VALIDATE_CERTIFICATE: "true"
+      DATA_MODE: "auto"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+    restart: unless-stopped

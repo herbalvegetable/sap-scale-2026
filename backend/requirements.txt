@@ -1,0 +1,6 @@
+fastapi>=0.116
+uvicorn[standard]>=0.35
+pydantic>=2.11
+hdbcli>=2.23
+httpx>=0.28
+pytest>=8.4

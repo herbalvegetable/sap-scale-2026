@@ -4,7 +4,14 @@ import logging
 from threading import Lock
 
 from app.config import Settings
-from app.models.schemas import Explanation, RiskScore
+from app.models.schemas import (
+    ActionableInsight,
+    ChatAuditRecord,
+    ChatMessage,
+    Explanation,
+    InsightDecisionRecord,
+    RiskScore,
+)
 from app.services.demo_data import get_demo_alerts
 from app.services.hana_client import HanaClient
 
@@ -19,6 +26,10 @@ class RiskRepository:
         self.hana = hana
         self._scores: dict[str, RiskScore] = {}
         self._explanations: dict[str, Explanation] = {}
+        self._insights: dict[str, ActionableInsight] = {}
+        self._insight_audit_log: list[InsightDecisionRecord] = []
+        self._chat_threads: dict[str, list[ChatMessage]] = {}
+        self._chat_audit_log: list[ChatAuditRecord] = []
         self._contexts: list[dict] | None = None
         self._lock = Lock()
         self._mode: str | None = None
@@ -48,6 +59,13 @@ class RiskRepository:
                 logger.warning("Live alert query failed; using demo dataset: %s", exc)
                 self._mode = "demo"
         self._contexts = get_demo_alerts()
+        for row in self._contexts:
+            raw_status = str(row.get("status") or "OPEN").upper()
+            row["raw_status"] = raw_status
+            row["status"] = "investigating" if "REVIEW" in raw_status or "INVESTIGAT" in raw_status else "open"
+            row["status_label"] = row["status"].capitalize()
+            row["status_reason"] = None
+            row["sla_breached"] = False
         return self._contexts
 
     def get_alert_context(self, alert_id: str) -> dict | None:
@@ -63,8 +81,15 @@ class RiskRepository:
                 A.COMPANY_ID,
                 C.LEGAL_NAME AS COMPANY_NAME,
                 A.ALERT_TYPE,
+                A.ALERT_SUBTYPE,
                 A.STATUS,
                 A.ALERT_DESCRIPTION AS DESCRIPTION,
+                A.RESOLUTION_CODE,
+                A.RESOLUTION_NOTES,
+                A.RESOLVED_BY,
+                A.RESOLVED_AT,
+                A.SLA_DUE_AT,
+                A.SLA_BREACHED,
                 T.AMOUNT_USD AS AMOUNT,
                 T.CURRENCY_ORIGINAL AS CURRENCY,
                 OC.COUNTRY_NAME AS ORIGIN_COUNTRY,
@@ -130,6 +155,24 @@ class RiskRepository:
 
     @staticmethod
     def _canonical_live_row(row: dict) -> dict:
+        raw_status = str(row.get("status") or "OPEN").upper()
+        if raw_status.startswith("CLOSED"):
+            status = "closed"
+            # CLOSED_FALSE = closed because manual review took too long (SLA timeout).
+            if (
+                raw_status in {"CLOSED_FALSE", "CLOSED-FALSE"}
+                or "TIMEOUT" in raw_status
+                or (bool(row.get("sla_breached")) and not row.get("resolved_by"))
+            ):
+                status_reason = "Closed – Manual review took too long"
+            else:
+                status_reason = "Closed – Resolved by team"
+        elif raw_status in {"INVESTIGATING", "IN_REVIEW", "IN REVIEW"}:
+            status = "investigating"
+            status_reason = None
+        else:
+            status = "open"
+            status_reason = None
         return {
             **row,
             "id": str(row["id"]),
@@ -137,6 +180,11 @@ class RiskRepository:
             "company_id": str(row.get("company_id") or "UNKNOWN"),
             "company_name": str(row.get("company_name") or "Unknown entity"),
             "description": str(row.get("description") or row.get("alert_type") or "Transaction monitoring alert"),
+            "status": status,
+            "raw_status": raw_status,
+            "status_label": status.capitalize(),
+            "status_reason": status_reason,
+            "sla_breached": bool(row.get("sla_breached")),
             "transaction": {
                 "counterparty": str(row.get("counterparty") or "Unknown counterparty"),
                 "occurred_at": row["occurred_at"],
@@ -174,6 +222,102 @@ class RiskRepository:
             },
         }
 
+    def get_beneficial_owners(self, company_id: str) -> list[dict]:
+        if self.mode != "hana":
+            return []
+        schema = self.settings.reference_schema
+        try:
+            return self.hana.query(
+                f"""
+                SELECT
+                    BO.OWNER_ID AS ID,
+                    BO.OWNER_NAME AS NAME,
+                    BO.OWNERSHIP_PERCENTAGE,
+                    BO.IS_PEP,
+                    BO.SANCTIONS_MATCH,
+                    COALESCE(NC.COUNTRY_NAME, 'Not supplied') AS NATIONALITY,
+                    COALESCE(RC.COUNTRY_NAME, 'Not supplied') AS RESIDENCE
+                FROM {schema}.COMPANY_BENEFICIAL_OWNERS BO
+                LEFT JOIN {schema}.COUNTRIES NC ON NC.COUNTRY_ID = BO.NATIONALITY_COUNTRY_ID
+                LEFT JOIN {schema}.COUNTRIES RC ON RC.COUNTRY_ID = BO.RESIDENCE_COUNTRY_ID
+                WHERE BO.COMPANY_ID = ?
+                ORDER BY BO.OWNERSHIP_PERCENTAGE DESC
+                """,
+                (int(company_id),),
+            )
+        except Exception as exc:
+            logger.warning("Could not retrieve beneficial owners for company %s: %s", company_id, exc)
+            return []
+
+    def get_transaction_activity(self, company_id: str, risk_level: float) -> list[dict]:
+        if self.mode != "hana":
+            context = next(
+                (item for item in self.all_alert_contexts() if str(item["company_id"]) == company_id),
+                None,
+            )
+            if context is None:
+                return []
+            return self._demo_activity_series(context, risk_level)
+        schema = self.settings.reference_schema
+        try:
+            rows = self.hana.query(
+                f"""
+                SELECT * FROM (
+                    SELECT
+                        TO_VARCHAR(INITIATED_AT, 'YYYY-MM') AS PERIOD,
+                        COUNT(*) AS TRANSACTION_COUNT,
+                        SUM(AMOUNT_USD) AS TOTAL_AMOUNT,
+                        AVG(AMOUNT_USD) AS AVERAGE_AMOUNT
+                    FROM {schema}.TRANSACTIONS
+                    WHERE ORIGINATOR_COMPANY_ID = ? OR BENEFICIARY_COMPANY_ID = ?
+                    GROUP BY TO_VARCHAR(INITIATED_AT, 'YYYY-MM')
+                    ORDER BY PERIOD DESC
+                    LIMIT 12
+                ) RECENT_ACTIVITY
+                ORDER BY PERIOD ASC
+                """,
+                (int(company_id), int(company_id)),
+            )
+            return [{**row, "risk_level": risk_level} for row in rows]
+        except Exception as exc:
+            logger.warning("Could not retrieve transaction activity for company %s: %s", company_id, exc)
+            return []
+
+    @staticmethod
+    def _demo_activity_series(context: dict, risk_level: float) -> list[dict]:
+        """Build a short synthetic history for demo charts (grounded on baseline + current amount)."""
+        from calendar import monthrange
+        from datetime import datetime, timezone
+
+        occurred = context["transaction"]["occurred_at"]
+        if not isinstance(occurred, datetime):
+            occurred = datetime.now(timezone.utc)
+        baseline = float(context["company"].get("baseline_average_amount") or context["amount"])
+        current = float(context["amount"])
+        freq = max(1, int(context["company"].get("baseline_monthly_frequency") or 4))
+        year, month = occurred.year, occurred.month
+        points: list[dict] = []
+        for offset in range(5, -1, -1):
+            m = month - offset
+            y = year
+            while m <= 0:
+                m += 12
+                y -= 1
+            blend = 0.15 * (5 - offset)
+            total = baseline * (0.85 + 0.08 * ((5 - offset) % 3)) * (1 - blend) + current * blend
+            count = max(1, freq - (offset % 3))
+            points.append(
+                {
+                    "period": f"{y:04d}-{m:02d}",
+                    "transaction_count": count,
+                    "total_amount": round(total, 2),
+                    "average_amount": round(total / count, 2),
+                    "risk_level": risk_level if offset == 0 else max(10.0, risk_level * (0.55 + 0.08 * (5 - offset))),
+                }
+            )
+            _ = monthrange(y, m)  # validate calendar month
+        return points
+
     def get_score(self, alert_id: str) -> RiskScore | None:
         return self._scores.get(alert_id)
 
@@ -187,3 +331,39 @@ class RiskRepository:
     def save_explanation(self, explanation: Explanation) -> None:
         with self._lock:
             self._explanations[explanation.alert_id] = explanation
+
+    def get_insight(self, alert_id: str) -> ActionableInsight | None:
+        return self._insights.get(alert_id)
+
+    def get_insight_by_id(self, insight_id: str) -> ActionableInsight | None:
+        return next((item for item in self._insights.values() if item.insight_id == insight_id), None)
+
+    def save_insight(self, insight: ActionableInsight) -> None:
+        with self._lock:
+            self._insights[insight.alert_id] = insight
+
+    def append_insight_decision(self, record: InsightDecisionRecord) -> None:
+        with self._lock:
+            self._insight_audit_log.append(record)
+
+    def list_insight_decisions(self, alert_id: str | None = None) -> list[InsightDecisionRecord]:
+        if alert_id is None:
+            return list(self._insight_audit_log)
+        return [item for item in self._insight_audit_log if item.alert_id == alert_id]
+
+    def get_chat_thread(self, alert_id: str) -> list[ChatMessage]:
+        return list(self._chat_threads.get(alert_id, []))
+
+    def append_chat_messages(self, alert_id: str, messages: list[ChatMessage]) -> None:
+        with self._lock:
+            thread = self._chat_threads.setdefault(alert_id, [])
+            thread.extend(messages)
+
+    def append_chat_audit(self, record: ChatAuditRecord) -> None:
+        with self._lock:
+            self._chat_audit_log.append(record)
+
+    def list_chat_audit(self, alert_id: str | None = None) -> list[ChatAuditRecord]:
+        if alert_id is None:
+            return list(self._chat_audit_log)
+        return [item for item in self._chat_audit_log if item.alert_id == alert_id]

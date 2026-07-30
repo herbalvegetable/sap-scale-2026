@@ -1,5 +1,13 @@
 import { ShieldCheck } from "lucide-react";
-import type { FactorScore } from "../lib/types";
+import type { FactorScore, RiskTier } from "../lib/types";
+
+function formatEvidenceValue(label: string, value: string) {
+  if (!/ratio/i.test(label) && !/×/.test(value)) return value;
+  return value.replace(/(-?\d+(?:\.\d+)?)/g, (num) => {
+    const parsed = Number(num);
+    return Number.isFinite(parsed) ? parsed.toFixed(1) : num;
+  });
+}
 
 export function RiskBreakdown({ factors }: { factors: FactorScore[] }) {
   return (
@@ -14,11 +22,14 @@ export function RiskBreakdown({ factors }: { factors: FactorScore[] }) {
       <div className="factor-list">
         {factors.map((factor) => {
           const percentage = (factor.score / factor.max_score) * 100;
+          const level: RiskTier = percentage >= 67 ? "high" : percentage >= 34 ? "medium" : "low";
+          const isTransactionBehaviour = factor.key === "transaction_behaviour";
           return (
-            <article className="factor" key={factor.key}>
+            <article className={`factor factor--${level}`} key={factor.key}>
               <div className="factor__topline">
                 <div>
                   <h3>{factor.label}</h3>
+                  <span className={`factor-level factor-level--${level}`}>{level} risk</span>
                   <p>{factor.rationale}</p>
                 </div>
                 <strong>
@@ -27,13 +38,18 @@ export function RiskBreakdown({ factors }: { factors: FactorScore[] }) {
                 </strong>
               </div>
               <div className="factor__bar" aria-label={`${factor.label}: ${factor.score} of ${factor.max_score}`}>
-                <span style={{ width: `${percentage}%` }} />
+                <span className={`factor__fill factor__fill--${level}`} style={{ width: `${percentage}%` }} />
               </div>
               {factor.evidence.length > 0 && (
                 <div className="evidence-row">
                   {factor.evidence.map((item) => (
                     <span className="evidence-chip" key={`${item.source}-${item.label}`}>
-                      {item.label}: <b>{item.value}</b>
+                      {item.label}:{" "}
+                      <b>
+                        {isTransactionBehaviour || /ratio/i.test(item.label)
+                          ? formatEvidenceValue(item.label, item.value)
+                          : item.value}
+                      </b>
                     </span>
                   ))}
                 </div>

@@ -1,0 +1,16 @@
+{
+  "freshness_high_max_days": 90,
+  "freshness_medium_max_days": 365,
+  "corroboration_high_min": 2,
+  "match_fuzzy_min_similarity": 90,
+  "key_driver_ratio_threshold": 0.6,
+  "key_driver_fallback_count": 2,
+  "default_freshness_days": 60,
+  "factor_required_fields": {
+    "entity_risk": ["risk_rating", "sanctions_match", "pep"],
+    "transaction_behaviour": ["amount", "amount_ratio"],
+    "geographic_risk": ["destination_country", "fatf_risk"],
+    "behavioural_deviation": ["baseline_average_amount", "amount_ratio"],
+    "regulatory_sensitivity": ["prior_cases", "supervisory_attention"]
+  }
+}

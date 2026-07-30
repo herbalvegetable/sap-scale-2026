@@ -1,8 +1,13 @@
 import type {
+  ActionableInsight,
   AlertDetail,
   AlertPage,
   AlertStats,
+  ChatResponse,
+  ChatThreadResponse,
   Explanation,
+  InsightDecisionRequest,
+  InsightDecisionResponse,
   RiskTier,
   ServiceHealth,
 } from "./types";
@@ -58,4 +63,18 @@ export const api = {
     request<AlertDetail["score"]>(`/alerts/${id}/score`, { method: "POST" }),
   refreshExplanation: (id: string) =>
     request<Explanation>(`/alerts/${id}/explain`, { method: "POST" }),
+  generateInsights: (id: string) =>
+    request<ActionableInsight>(`/alerts/${id}/insights`, { method: "POST" }),
+  getInsights: (id: string) => request<ActionableInsight>(`/alerts/${id}/insights`),
+  decideInsight: (id: string, body: InsightDecisionRequest) =>
+    request<InsightDecisionResponse>(`/alerts/${id}/insights/decision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  chatHistory: (id: string) => request<ChatThreadResponse>(`/alerts/${id}/chat`),
+  chat: (id: string, message: string) =>
+    request<ChatResponse>(`/alerts/${id}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
 };

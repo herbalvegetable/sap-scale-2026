@@ -2,7 +2,7 @@ services:
   backend:
     build: ./backend
     env_file:
-      - path: ./team_08.env
+      - path: ./credentials/team_08.env
         format: raw
     environment:
       HANA_VALIDATE_CERTIFICATE: "true"

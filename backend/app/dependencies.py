@@ -1,7 +1,9 @@
 from functools import lru_cache
 
 from app.config import get_settings
+from app.services.actionable_insights import ActionableInsightsService
 from app.services.ai_core_client import AICoreClient
+from app.services.case_chat import CaseChatService
 from app.services.hana_client import HanaClient
 from app.services.rag_pipeline import RiskIntelligenceService
 from app.services.repository import RiskRepository
@@ -37,6 +39,27 @@ def get_vector_store() -> HanaVectorStore:
 @lru_cache
 def get_intelligence_service() -> RiskIntelligenceService:
     return RiskIntelligenceService(
+        get_settings(),
+        get_repository(),
+        get_scoring_engine(),
+        get_ai_core(),
+        get_vector_store(),
+    )
+
+
+@lru_cache
+def get_insights_service() -> ActionableInsightsService:
+    return ActionableInsightsService(
+        get_settings(),
+        get_repository(),
+        get_scoring_engine(),
+        get_ai_core(),
+    )
+
+
+@lru_cache
+def get_case_chat_service() -> CaseChatService:
+    return CaseChatService(
         get_settings(),
         get_repository(),
         get_scoring_engine(),

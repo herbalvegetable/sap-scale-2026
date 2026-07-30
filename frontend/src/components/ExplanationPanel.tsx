@@ -1,19 +1,43 @@
-import { BrainCircuit, CheckCircle2, FileSearch, Info, RefreshCw } from "lucide-react";
-import type { Explanation } from "../lib/types";
+import { CheckCircle2, FileSearch, Info, RefreshCw, ListChecks } from "lucide-react";
+import type { ActionableInsight, Explanation } from "../lib/types";
+import { RecommendationCard } from "./RecommendationCard";
 
 interface Props {
   explanation?: Explanation;
   loading: boolean;
   refreshing: boolean;
   onRefresh: () => void;
+  actionableInsight?: ActionableInsight;
+  generatingActions: boolean;
+  actionError?: string;
+  onGenerateActions: () => void;
+  deciding: boolean;
+  decisionError?: string;
+  draftOverride?: string;
+  onApprove: (editedDraftNotes: string) => void;
+  onOverride: (editedDraftNotes: string, reasonCode: string, freeText: string) => void;
 }
 
-export function ExplanationPanel({ explanation, loading, refreshing, onRefresh }: Props) {
+export function ExplanationPanel({
+  explanation,
+  loading,
+  refreshing,
+  onRefresh,
+  actionableInsight,
+  generatingActions,
+  actionError,
+  onGenerateActions,
+  deciding,
+  decisionError,
+  draftOverride,
+  onApprove,
+  onOverride,
+}: Props) {
   return (
     <section className="panel intelligence-panel" aria-labelledby="intelligence-heading">
       <div className="panel__heading">
         <div>
-          <p className="eyebrow">SAP AI Core · GPT-4o</p>
+          <p className="eyebrow">Investigator brief</p>
           <h2 id="intelligence-heading">Risk intelligence</h2>
         </div>
         <button className="icon-button" onClick={onRefresh} disabled={refreshing} aria-label="Regenerate explanation">
@@ -31,7 +55,7 @@ export function ExplanationPanel({ explanation, loading, refreshing, onRefresh }
       ) : explanation ? (
         <>
           <div className="ai-summary">
-            <BrainCircuit size={24} aria-hidden="true" />
+            <Info size={24} aria-hidden="true" />
             <p>{explanation.summary}</p>
           </div>
           <div className="intelligence-grid">
@@ -48,11 +72,29 @@ export function ExplanationPanel({ explanation, loading, refreshing, onRefresh }
             <h3>Recommended investigator checks</h3>
             <ol>{explanation.recommended_checks.map((item) => <li key={item}>{item}</li>)}</ol>
           </div>
+          <div className="actionable-insights">
+            <button className="ui-button ui-button--primary ui-button--default" onClick={onGenerateActions} disabled={generatingActions}>
+              {generatingActions ? <RefreshCw className="spin" size={16} /> : <ListChecks size={16} />}
+              {generatingActions ? "Generating recommendation…" : "Generate Actionable Insights"}
+            </button>
+            <p>Produces a structured recommendation card with urgency, evidence, precedent, and a draft note — never auto-executed.</p>
+            {actionError && <div className="inline-error">{actionError}</div>}
+            {actionableInsight && (
+              <RecommendationCard
+                key={actionableInsight.insight_id}
+                insight={actionableInsight}
+                deciding={deciding}
+                decisionError={decisionError}
+                draftOverride={draftOverride}
+                onApprove={onApprove}
+                onOverride={onOverride}
+              />
+            )}
+          </div>
           <div className="model-note">
             <Info size={15} />
             <span>
-              {explanation.model} · {explanation.provenance} · {explanation.prompt_version}.
-              Human review is required.
+              Generated {new Date(explanation.generated_at).toLocaleString()}. Human review is required.
             </span>
           </div>
         </>

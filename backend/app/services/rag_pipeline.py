@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.config import Settings
 from app.models.schemas import EvidenceItem, Explanation
 from app.services.ai_core_client import AICoreClient, AICoreError
+from app.services.confidence_assessor import targeted_investigator_checks
 from app.services.repository import RiskRepository
 from app.services.scoring_engine import ScoringEngine
 from app.services.vector_store import HanaVectorStore
@@ -21,6 +22,32 @@ class ModelExplanation(BaseModel):
     mitigating_factors: list[str] = Field(max_length=5)
     recommended_checks: list[str] = Field(min_length=1, max_length=6)
     limitations: list[str] = Field(min_length=1, max_length=5)
+
+    @field_validator(
+        "key_drivers",
+        "mitigating_factors",
+        "recommended_checks",
+        "limitations",
+        mode="before",
+    )
+    @classmethod
+    def normalize_structured_list_items(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        normalized: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                label = item.get("factor") or item.get("title") or item.get("action")
+                detail = (
+                    item.get("detail")
+                    or item.get("rationale")
+                    or item.get("description")
+                    or item.get("reason")
+                )
+                normalized.append(f"{label}: {detail}" if label and detail else str(detail or label or item))
+            else:
+                normalized.append(str(item))
+        return normalized
 
 
 EXPLANATION_SYSTEM_PROMPT = """
@@ -91,12 +118,17 @@ class RiskIntelligenceService:
             provenance = "fallback"
             model = "template-fallback-v1"
 
+        checks = list(generated.recommended_checks)
+        for check in targeted_investigator_checks(score):
+            if check not in checks:
+                checks.append(check)
+
         result = Explanation(
             alert_id=alert_id,
             summary=generated.summary,
             key_drivers=generated.key_drivers,
             mitigating_factors=generated.mitigating_factors,
-            recommended_checks=generated.recommended_checks,
+            recommended_checks=checks,
             limitations=generated.limitations,
             citations=self._deduplicate_citations(citations),
             provenance=provenance,

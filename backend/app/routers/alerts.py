@@ -11,6 +11,8 @@ from app.models.schemas import (
     AlertPage,
     AlertStats,
     AlertSummary,
+    ActivityPoint,
+    BeneficialOwner,
     CompanyDetail,
     RiskScore,
     TransactionDetail,
@@ -30,6 +32,9 @@ def _summary(context: dict, score: RiskScore) -> AlertSummary:
         company_name=str(context["company_name"]),
         alert_type=str(context["alert_type"]),
         status=str(context["status"]),
+        status_label=str(context["status_label"]),
+        status_reason=context.get("status_reason"),
+        sla_breached=bool(context.get("sla_breached")),
         amount=float(context["amount"]),
         currency=str(context["currency"]),
         origin_country=str(context["origin_country"]),
@@ -39,9 +44,11 @@ def _summary(context: dict, score: RiskScore) -> AlertSummary:
     )
 
 
-def _detail(context: dict, score: RiskScore) -> AlertDetail:
+def _detail(context: dict, score: RiskScore, repository: RiskRepository) -> AlertDetail:
     transaction = context["transaction"]
     company = context["company"]
+    owners = repository.get_beneficial_owners(str(context["company_id"]))
+    activity = repository.get_transaction_activity(str(context["company_id"]), score.total)
     return AlertDetail(
         **_summary(context, score).model_dump(),
         description=str(context["description"]),
@@ -70,6 +77,30 @@ def _detail(context: dict, score: RiskScore) -> AlertDetail:
             baseline_average_amount=float(company["baseline_average_amount"]),
             baseline_monthly_frequency=float(company["baseline_monthly_frequency"]),
         ),
+        beneficial_owners=[
+            BeneficialOwner(
+                id=str(owner["id"]),
+                name=str(owner["name"]),
+                ownership_percentage=float(owner.get("ownership_percentage") or 0),
+                is_pep=bool(owner.get("is_pep")),
+                sanctions_match=bool(owner.get("sanctions_match")),
+                nationality=str(owner.get("nationality") or "Not supplied"),
+                residence=str(owner.get("residence") or "Not supplied"),
+                relationship="Direct beneficial owner",
+            )
+            for owner in owners
+        ],
+        amount_ratio=round(float(context["signals"].get("amount_ratio") or 0), 1),
+        activity=[
+            ActivityPoint(
+                period=str(point["period"]),
+                transaction_count=int(point.get("transaction_count") or 0),
+                total_amount=float(point.get("total_amount") or 0),
+                average_amount=float(point.get("average_amount") or 0),
+                risk_level=float(point.get("risk_level") or score.total),
+            )
+            for point in activity
+        ],
     )
 
 
@@ -132,6 +163,9 @@ def alert_stats(
         low=sum(score.tier == "low" for score in scores),
         average_score=round(sum(score.total for score in scores) / len(scores), 1) if scores else 0,
         open_alerts=sum(str(row["status"]).lower() == "open" for row in rows),
+        investigating=sum(str(row["status"]).lower() == "investigating" for row in rows),
+        closed=sum(str(row["status"]).lower() == "closed" for row in rows),
+        sla_breached=sum(bool(row.get("sla_breached")) for row in rows),
     )
 
 
@@ -144,7 +178,7 @@ def get_alert(
     context = repository.get_alert_context(alert_id)
     if context is None:
         raise HTTPException(status_code=404, detail="Alert not found")
-    return _detail(context, scoring.score_alert(alert_id))
+    return _detail(context, scoring.score_alert(alert_id), repository)
 
 
 @router.get("/{alert_id}/score", response_model=RiskScore)

@@ -4,6 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./styles.css";
 
+document.documentElement.setAttribute(
+  "data-theme",
+  window.localStorage.getItem("riskassess-theme") === "dark" ? "dark" : "light",
+);
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

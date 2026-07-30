@@ -43,6 +43,13 @@ DEMO_ALERTS: list[dict] = [
             "fatf_risk": "High",
             "supervisory_attention": True,
             "new_corridor": True,
+            # Low-confidence key driver: fuzzy sanctions match + stale ownership data
+            "sanctions_match_type": "fuzzy",
+            "sanctions_similarity": 82,
+            "ownership_freshness_days": 335,
+            "baseline_freshness_days": 40,
+            "country_data_freshness_days": 45,
+            "cases_freshness_days": 70,
         },
     },
     {
@@ -81,6 +88,12 @@ DEMO_ALERTS: list[dict] = [
             "fatf_risk": "Medium",
             "supervisory_attention": True,
             "new_corridor": False,
+            # Medium confidence: slightly stale baseline for behavioural/transaction factors
+            "sanctions_match_type": "none",
+            "ownership_freshness_days": 55,
+            "baseline_freshness_days": 210,
+            "country_data_freshness_days": 80,
+            "cases_freshness_days": 95,
         },
     },
     {
@@ -119,6 +132,11 @@ DEMO_ALERTS: list[dict] = [
             "fatf_risk": "Medium",
             "supervisory_attention": True,
             "new_corridor": True,
+            "sanctions_match_type": "none",
+            "ownership_freshness_days": 40,
+            "baseline_freshness_days": 30,
+            "country_data_freshness_days": 50,
+            "cases_freshness_days": 60,
         },
     },
     {
@@ -157,6 +175,12 @@ DEMO_ALERTS: list[dict] = [
             "fatf_risk": "Low",
             "supervisory_attention": True,
             "new_corridor": False,
+            # High confidence: fresh, complete, corroborated inputs
+            "sanctions_match_type": "none",
+            "ownership_freshness_days": 20,
+            "baseline_freshness_days": 25,
+            "country_data_freshness_days": 15,
+            "cases_freshness_days": 30,
         },
     },
     {
@@ -195,6 +219,11 @@ DEMO_ALERTS: list[dict] = [
             "fatf_risk": "Low",
             "supervisory_attention": False,
             "new_corridor": False,
+            "sanctions_match_type": "none",
+            "ownership_freshness_days": 45,
+            "baseline_freshness_days": 50,
+            "country_data_freshness_days": 40,
+            "cases_freshness_days": 55,
         },
     },
     {
@@ -233,6 +262,11 @@ DEMO_ALERTS: list[dict] = [
             "fatf_risk": "Low",
             "supervisory_attention": False,
             "new_corridor": False,
+            "sanctions_match_type": "none",
+            "ownership_freshness_days": 35,
+            "baseline_freshness_days": 28,
+            "country_data_freshness_days": 22,
+            "cases_freshness_days": 40,
         },
     },
 ]

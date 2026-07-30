@@ -17,8 +17,8 @@ POLICY_DOCUMENTS = [
     {
         "id": "POL-HUMAN-ACCOUNTABILITY",
         "title": "Human accountability requirement",
-        "content": "AI output supports alert prioritisation and investigation only. A human investigator remains accountable for alert disposition, SAR decisions, payment blocking, and customer outcomes. Fully autonomous blocking is prohibited.",
-        "source": "TrustSphere AI Governance Standard",
+        "content": "RiskAssess output supports alert prioritisation and investigation only. A human investigator remains accountable for alert disposition, SAR decisions, payment blocking, and customer outcomes. Fully autonomous blocking is prohibited.",
+        "source": "TrustSphere Governance Standard",
         "tags": "human review sar payment blocking governance",
     },
     {
@@ -55,6 +55,20 @@ POLICY_DOCUMENTS = [
         "content": "Prior compliance cases may increase review priority when facts recur, but investigators must consider outcomes, recency, and whether earlier concerns were cleared. Previous cases do not determine the current disposition.",
         "source": "Case Investigation Standard",
         "tags": "prior case sar outcome regulatory sensitivity history",
+    },
+    {
+        "id": "POL-PEP-SLA",
+        "title": "PEP match review SLA",
+        "content": "Confirmed or potential PEP associations require enhanced due diligence within 24 hours of alert creation for open payment holds, and within 48 hours for post-settlement monitoring alerts. Medium-FATF jurisdictions do not shorten this SLA; they require documented source-of-funds and purpose-of-payment attestation before Tier-1 clearance. A human investigator must record Approve or Override — chat or AI output cannot complete the disposition.",
+        "source": "PEP Escalation Playbook",
+        "tags": "pep sla edd medium fatf jurisdiction timeline due diligence",
+    },
+    {
+        "id": "POL-MED-FATF",
+        "title": "Medium FATF jurisdiction procedure",
+        "content": "For corridors involving medium FATF-risk countries, investigators must verify the commercial purpose, check whether the corridor is established for the customer, and document residual geographic risk. Geographic medium scores alone do not mandate SAR drafting; combine with entity, behavioural, and regulatory factors before recommending escalation.",
+        "source": "Country Risk Operating Procedure",
+        "tags": "fatf medium geography corridor sla procedure sanctions",
     },
 ]
 

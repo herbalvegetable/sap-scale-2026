@@ -23,7 +23,7 @@ def _load_env_file(path: Path) -> None:
 
 
 def _credential_defaults() -> dict[str, str]:
-    path = ROOT_DIR / "team_08_credentials.json"
+    path = ROOT_DIR / "credentials" / "team_08_credentials.json"
     if not path.exists():
         return {}
     try:
@@ -96,6 +96,7 @@ def _as_bool(value: str | None, default: bool) -> bool:
 
 @lru_cache
 def get_settings() -> Settings:
+    _load_env_file(ROOT_DIR / "credentials" / "team_08.env")
     _load_env_file(ROOT_DIR / "team_08.env")
     _load_env_file(ROOT_DIR / ".env")
     defaults = _credential_defaults()

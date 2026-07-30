@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from app.config import Settings
 from app.models.schemas import EvidenceItem, FactorScore, RiskScore
 from app.services.ai_core_client import AICoreClient, AICoreError
+from app.services.confidence_assessor import attach_confidence
 from app.services.repository import RiskRepository
 
 logger = logging.getLogger(__name__)
@@ -114,12 +115,14 @@ class ScoringEngine:
             provenance = "fallback"
             model = "deterministic-fallback-v1"
 
+        factors, overall_confidence = attach_confidence(factors, context)
         total = round(sum(factor.score for factor in factors), 1)
         score = RiskScore(
             alert_id=alert_id,
             total=total,
             tier=self.tier_for(total),
             factors=factors,
+            confidence=overall_confidence,
             provenance=provenance,
             model=model,
             prompt_version=self.settings.prompt_version,

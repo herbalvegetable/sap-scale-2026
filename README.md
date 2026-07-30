@@ -27,7 +27,7 @@ $env:PYTHONPATH="backend"
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-RiskAssess reads `team_08.env`, `.env`, or `team_08_credentials.json` from the project root. Copy `.env.example` to `.env` for a fresh environment. Set `DATA_MODE=demo` for an entirely offline demonstration.
+RiskAssess reads `credentials/team_08.env`, `credentials/team_08_credentials.json`, or a root `.env`. Copy `.env.example` to `.env` for a fresh environment. Set `DATA_MODE=demo` for an entirely offline demonstration.
 
 API documentation is available at `http://localhost:8000/docs`.
 

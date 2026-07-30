@@ -1,26 +1,65 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Clock3, Search, ShieldAlert, Sparkles } from "lucide-react";
+import { AlertTriangle, Clock3, Filter, Search, SearchCheck, ShieldAlert, X } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { api } from "../lib/api";
-import type { RiskTier } from "../lib/types";
-import { AlertTable } from "./AlertTable";
+import { humanizeLabel } from "../lib/utils";
+import {
+  AlertTable,
+  buildCaseFilterOptions,
+  CASE_FILTER_FIELDS,
+  EMPTY_CASE_FILTERS,
+  type CaseFilters,
+} from "./AlertTable";
 import { Button } from "./ui/button";
 
 interface Props {
   onSelectAlert: (id: string) => void;
+  investigationsOnly?: boolean;
 }
 
-export function Dashboard({ onSelectAlert }: Props) {
-  const [tier, setTier] = useState<RiskTier | "all">("all");
+export function Dashboard({ onSelectAlert, investigationsOnly = false }: Props) {
   const [search, setSearch] = useState("");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState<CaseFilters>(EMPTY_CASE_FILTERS);
+  const filterRef = useRef<HTMLDivElement>(null);
+  const sortOrder = "desc" as const;
   const stats = useQuery({ queryKey: ["stats"], queryFn: api.stats });
   const alerts = useQuery({
-    queryKey: ["alerts", tier, search, sortOrder],
-    queryFn: () => api.alerts({ tier, search, sortOrder, pageSize: 50 }),
+    queryKey: ["alerts", search, sortOrder, investigationsOnly],
+    queryFn: () => api.alerts({
+      search,
+      sortOrder,
+      pageSize: 100,
+      status: investigationsOnly ? "investigating" : undefined,
+    }),
   });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, retry: 1 });
+
+  const alertItems = alerts.data?.items ?? [];
+  const filterOptions = useMemo(() => buildCaseFilterOptions(alertItems), [alertItems]);
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
+        setFiltersOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFiltersOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [filtersOpen]);
+
+  const setFilter = (key: keyof CaseFilters, value: string) =>
+    setFilters((current) => ({ ...current, [key]: value }));
 
   const chartData = stats.data
     ? [
@@ -34,9 +73,9 @@ export function Dashboard({ onSelectAlert }: Props) {
     <main className="page-shell">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Financial crime operations</p>
-          <h1>Alert command centre</h1>
-          <p>Prioritise the alerts that create the greatest regulatory exposure.</p>
+          <p className="eyebrow">{investigationsOnly ? "Active casework" : "Financial crime operations"}</p>
+          <h1>{investigationsOnly ? "Investigations" : "Case command centre"}</h1>
+          <p>{investigationsOnly ? "Review every case currently under active investigation." : "Prioritise the cases that create the greatest regulatory exposure."}</p>
         </div>
         <div className="live-indicator">
           <i />
@@ -48,17 +87,17 @@ export function Dashboard({ onSelectAlert }: Props) {
         <div className="notice" role="status">
           <AlertTriangle size={18} />
           <span>
-            Degraded mode: {health.data.data_mode === "demo" ? "demo data is active" : "AI fallback scoring is active"}.
-            Results show their provenance on the alert detail page.
+            Degraded mode: {health.data.data_mode === "demo" ? "demo data is active" : "scoring is running in limited mode"}.
+            Case detail pages still show factor evidence and assessment status.
           </span>
         </div>
       )}
 
-      <section className="metric-grid" aria-label="Alert queue overview">
+      <section className="metric-grid" aria-label="Case queue overview">
         <article className="metric-card metric-card--primary">
           <span className="metric-icon"><ShieldAlert /></span>
           <div>
-            <p>Total alerts</p>
+            <p>Total cases</p>
             <strong>{stats.data?.total ?? "—"}</strong>
             <span>{stats.data?.open_alerts ?? "—"} require review</span>
           </div>
@@ -72,11 +111,11 @@ export function Dashboard({ onSelectAlert }: Props) {
           </div>
         </article>
         <article className="metric-card">
-          <span className="metric-icon metric-icon--neutral"><Sparkles /></span>
+          <span className="metric-icon metric-icon--neutral"><SearchCheck /></span>
           <div>
-            <p>Average score</p>
-            <strong>{stats.data?.average_score ?? "—"}</strong>
-            <span>Across the active queue</span>
+            <p>Investigating</p>
+            <strong>{stats.data?.investigating ?? "—"}</strong>
+            <span>Active team casework</span>
           </div>
         </article>
         <article className="metric-card">
@@ -108,8 +147,8 @@ export function Dashboard({ onSelectAlert }: Props) {
       <section className="panel queue-panel">
         <div className="queue-header">
           <div>
-            <p className="eyebrow">Prioritised queue</p>
-            <h2>Transaction alerts</h2>
+            <p className="eyebrow">{investigationsOnly ? "Read-only workflow view" : "Prioritised queue"}</p>
+            <h2>{investigationsOnly ? "Cases under investigation" : "Transaction cases"}</h2>
           </div>
           <div className="queue-controls">
             <label className="search-box">
@@ -121,16 +160,61 @@ export function Dashboard({ onSelectAlert }: Props) {
                 placeholder="Search entity, alert or transaction"
               />
             </label>
-            <div className="segmented" aria-label="Filter by risk tier">
-              {(["all", "high", "medium", "low"] as const).map((item) => (
-                <button
-                  key={item}
-                  className={tier === item ? "active" : ""}
-                  onClick={() => setTier(item)}
-                >
-                  {item}
-                </button>
-              ))}
+            <div className="filter-control" ref={filterRef}>
+              <button
+                type="button"
+                className={`filter-button ${filtersOpen || activeFilterCount > 0 ? "active" : ""}`}
+                onClick={() => setFiltersOpen((open) => !open)}
+                aria-expanded={filtersOpen}
+                aria-haspopup="dialog"
+              >
+                <Filter size={15} />
+                Filters
+                {activeFilterCount > 0 && <span className="filter-button__count">{activeFilterCount}</span>}
+              </button>
+              {filtersOpen && (
+                <div className="filter-panel" role="dialog" aria-label="Filter transaction cases">
+                  <div className="filter-panel__header">
+                    <div>
+                      <strong>Filter cases</strong>
+                      <p>Select from values present in the current queue.</p>
+                    </div>
+                    <div className="filter-panel__actions">
+                      {activeFilterCount > 0 && (
+                        <button type="button" onClick={() => setFilters(EMPTY_CASE_FILTERS)}>
+                          Clear all
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="filter-panel__close"
+                        onClick={() => setFiltersOpen(false)}
+                        aria-label="Close filters"
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="filter-panel__grid">
+                    {CASE_FILTER_FIELDS.map(({ key, label }) => (
+                      <label key={key} className="filter-field">
+                        <span>{label}</span>
+                        <select
+                          value={filters[key]}
+                          onChange={(event) => setFilter(key, event.target.value)}
+                        >
+                          <option value="">All</option>
+                          {filterOptions[key].map((option) => (
+                            <option key={option} value={option}>
+                              {key === "alertType" ? humanizeLabel(option) : option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -145,9 +229,9 @@ export function Dashboard({ onSelectAlert }: Props) {
           </div>
         ) : (
           <AlertTable
-            alerts={alerts.data?.items ?? []}
+            alerts={alertItems}
+            filters={filters}
             onSelect={onSelectAlert}
-            onSort={() => setSortOrder((current) => current === "desc" ? "asc" : "desc")}
           />
         )}
       </section>

@@ -58,7 +58,10 @@ export function SettingsPage({ theme, onThemeChange }: Props) {
           </div>
         </div>
         <div className="settings-body">
-          <p>Sign out ends the current demo session. Authentication is not connected in this build.</p>
+          <p>
+            Investigator demo session · AP-Southeast residency · no autonomous actions.
+            Sign out ends this browser session; enterprise SSO is not wired in this build.
+          </p>
           <Button
             variant="outline"
             onClick={() => {

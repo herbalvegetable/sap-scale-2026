@@ -75,7 +75,11 @@ export function Dashboard({ onSelectAlert, investigationsOnly = false }: Props) 
         <div>
           <p className="eyebrow">{investigationsOnly ? "Active casework" : "Financial crime operations"}</p>
           <h1>{investigationsOnly ? "Investigations" : "Case command centre"}</h1>
-          <p>{investigationsOnly ? "Review every case currently under active investigation." : "Prioritise the cases that create the greatest regulatory exposure."}</p>
+          <p>
+            {investigationsOnly
+              ? "Review every case currently under active investigation."
+              : "Prioritise SLA-breached and high-tier cases first — the scored queue is the triage subset of the ops backlog."}
+          </p>
         </div>
         <div className="live-indicator">
           <i />
@@ -206,7 +210,9 @@ export function Dashboard({ onSelectAlert, investigationsOnly = false }: Props) 
                           <option value="">All</option>
                           {filterOptions[key].map((option) => (
                             <option key={option} value={option}>
-                              {key === "alertType" ? humanizeLabel(option) : option}
+                              {key === "alertType" || key === "risk" || key === "status"
+                                ? humanizeLabel(option)
+                                : option}
                             </option>
                           ))}
                         </select>

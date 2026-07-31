@@ -1,3 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../lib/api";
+import { humanizeLabel } from "../lib/utils";
+
 const FACTORS = [
   {
     name: "Entity risk profile",
@@ -32,6 +36,12 @@ const FACTORS = [
 ] as const;
 
 export function HelpGovernancePage() {
+  const audit = useQuery({
+    queryKey: ["audit", 20],
+    queryFn: () => api.audit(20),
+    refetchInterval: 15_000,
+  });
+
   return (
     <main className="page-shell help-page">
       <header className="page-header">
@@ -100,8 +110,92 @@ export function HelpGovernancePage() {
             <li>RiskAssess is decision support only. It does not block payments, file SARs, or determine guilt.</li>
             <li>Every score exposes factor evidence, assessment version, and generation time.</li>
             <li>When live data services are limited, deterministic scoring keeps the queue usable with clear status.</li>
-            <li>Investigators remain accountable for final case disposition.</li>
+            <li>Investigators remain accountable for final case disposition via Approve / Override controls.</li>
+            <li>
+              Model risk posture: prioritisation and decision-support follow lighter governance; any model that
+              would autonomously change customer outcomes requires formal Model Risk Management validation first.
+            </li>
           </ul>
+        </div>
+      </section>
+
+      <section className="panel help-card">
+        <div className="panel__heading">
+          <div>
+            <p className="eyebrow">Privacy & security</p>
+            <h2>Residency, prompt minimisation, injection controls</h2>
+          </div>
+        </div>
+        <div className="help-body">
+          <ul>
+            <li>
+              Customer data stays in approved regional environments — SAP BTP / HANA in
+              {" "}{audit.data?.privacy?.region ?? "AP-Southeast (Singapore BTP)"}.
+            </li>
+            <li>
+              Investigators see full case facts in the UI; generative prompts receive minimised / hashed
+              identifiers and redacted free-text purposes ({audit.data?.privacy?.mode ?? "prompt_minimisation"}).
+            </li>
+            <li>
+              User messages and retrieved policy passages are wrapped as untrusted data. Requests to clear,
+              escalate, file a SAR, or freeze funds are refused — disposition stays on the recommendation card.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section className="panel help-card">
+        <div className="panel__heading">
+          <div>
+            <p className="eyebrow">Data architecture</p>
+            <h2>Normalisation and backlog triage</h2>
+          </div>
+        </div>
+        <div className="help-body">
+          <ul>
+            <li>
+              Live alerts are joined from HANA sources and normalised into a canonical status
+              (open / investigating / closed) with SLA breach flags — siloed raw statuses stay visible as provenance.
+            </li>
+            <li>
+              Backlog KPIs measure the full operations population. The scored work queue is the prioritised subset
+              (SLA-breached and high-tier first) so remediation focuses on regulatory exposure before a full core replatform.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section className="panel help-card">
+        <div className="panel__heading">
+          <div>
+            <p className="eyebrow">Audit trail</p>
+            <h2>Recent human and guardrail events</h2>
+          </div>
+        </div>
+        <div className="help-body">
+          <p>
+            Decisions and chat refusals append to a durable session audit log so restarts do not erase the demo trail.
+          </p>
+          {audit.isLoading && <p>Loading audit events…</p>}
+          {audit.isError && <p>Audit feed unavailable in this session.</p>}
+          {audit.data && audit.data.items.length === 0 && (
+            <p>No decisions or chat refusals recorded yet. Approve or Override a recommendation to create one.</p>
+          )}
+          {audit.data && audit.data.items.length > 0 && (
+            <ul className="help-audit-list">
+              {audit.data.items.map((event) => (
+                <li key={`${event.event_type}-${event.timestamp}-${event.summary}`}>
+                  <strong>{humanizeLabel(event.event_type)}</strong>
+                  <span>
+                    {new Date(event.timestamp).toLocaleString()}
+                    {event.alert_id ? ` · ${event.alert_id}` : ""}
+                    {event.refused_action ? " · refused" : ""}
+                  </span>
+                  <small>{event.summary}</small>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </section>
     </main>

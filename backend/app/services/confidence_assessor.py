@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.models.schemas import FactorConfidence, FactorScore, RiskScore
+from app.services.presentable import present_missing_fields
 
 THRESHOLDS_PATH = Path(__file__).resolve().parent.parent / "confidence_thresholds.json"
 
@@ -83,7 +84,7 @@ def _completeness_status(
         critical = len(missing) >= max(1, len(required) // 2 + 1) or any(
             field in {"fatf_risk", "amount", "risk_rating"} for field in missing
         )
-        return True, critical, f"required fields missing or unknown: {', '.join(missing)}"
+        return True, critical, present_missing_fields(missing)
     return False, False, "required factor inputs are populated"
 
 

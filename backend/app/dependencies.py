@@ -5,6 +5,7 @@ from app.services.actionable_insights import ActionableInsightsService
 from app.services.ai_core_client import AICoreClient
 from app.services.case_chat import CaseChatService
 from app.services.hana_client import HanaClient
+from app.services.performance_chat import PerformanceChatService
 from app.services.rag_pipeline import RiskIntelligenceService
 from app.services.repository import RiskRepository
 from app.services.scoring_engine import ScoringEngine
@@ -65,4 +66,14 @@ def get_case_chat_service() -> CaseChatService:
         get_scoring_engine(),
         get_ai_core(),
         get_vector_store(),
+    )
+
+
+@lru_cache
+def get_performance_chat_service() -> PerformanceChatService:
+    return PerformanceChatService(
+        get_settings(),
+        get_repository(),
+        get_scoring_engine(),
+        get_ai_core(),
     )

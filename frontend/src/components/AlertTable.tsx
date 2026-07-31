@@ -26,7 +26,7 @@ const relativeTime = (value: string) => {
 };
 
 export function TierBadge({ tier }: { tier: AlertSummary["score"]["tier"] }) {
-  return <span className={`tier-badge tier-badge--${tier}`}>{tier}</span>;
+  return <span className={`tier-badge tier-badge--${tier}`}>{humanizeLabel(tier)}</span>;
 }
 
 export type SortKey = "risk" | "entity" | "amount" | "route" | "status" | "raised";
@@ -76,7 +76,9 @@ export const CASE_FILTER_FIELDS: { key: keyof CaseFilters; label: string }[] = [
 const isReviewTimeout = (reason: string | null | undefined) =>
   Boolean(
     reason &&
-      (reason.includes("Manual review took too long") || reason.includes("Auto-timeout")),
+      (reason.includes("expired review timeline") ||
+        reason.includes("Manual review took too long") ||
+        reason.includes("Auto-timeout")),
   );
 
 export function statusDisplay(alert: AlertSummary) {

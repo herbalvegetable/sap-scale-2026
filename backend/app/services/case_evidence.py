@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.schemas import PrecedentCase, RoutingSuggestion
+from app.services.presentable import queue_label
 
 # Shared mock case-evidence store for Actionable Insights and Case Assistant.
 CASE_EVIDENCE: dict[str, dict[str, Any]] = {
@@ -55,9 +56,9 @@ CASE_EVIDENCE: dict[str, dict[str, Any]] = {
         ],
         "routing": RoutingSuggestion(
             team="FCU Tier-2 Sanctions Desk",
-            queue="SAR-CANDIDATE-APAC",
+            queue=queue_label("SAR-CANDIDATE-APAC"),
             jurisdiction="SG",
-            workload_note="Mocked queue depth: 7 open (above weekly average of 4)",
+            workload_note="Queue depth: 7 open (above weekly average of 4)",
         ),
     },
     "ALT-2026-00839": {
@@ -101,9 +102,9 @@ CASE_EVIDENCE: dict[str, dict[str, Any]] = {
         ],
         "routing": RoutingSuggestion(
             team="FCU Tier-1 EU Structuring",
-            queue="PATTERN-REVIEW-EU",
+            queue=queue_label("PATTERN-REVIEW-EU"),
             jurisdiction="DE",
-            workload_note="Mocked queue depth: 11 open (moderate load)",
+            workload_note="Queue depth: 11 open (moderate load)",
         ),
     },
     "ALT-2026-00836": {
@@ -137,9 +138,9 @@ CASE_EVIDENCE: dict[str, dict[str, Any]] = {
         ],
         "routing": RoutingSuggestion(
             team="FCU Tier-1 APAC KYC",
-            queue="KYC-REFRESH-APAC",
+            queue=queue_label("KYC-REFRESH-APAC"),
             jurisdiction="SG",
-            workload_note="Mocked queue depth: 5 open (below capacity)",
+            workload_note="Queue depth: 5 open (below capacity)",
         ),
     },
     "ALT-2026-00831": {
@@ -171,9 +172,9 @@ CASE_EVIDENCE: dict[str, dict[str, Any]] = {
         ],
         "routing": RoutingSuggestion(
             team="FCU Tier-1 EU Threshold",
-            queue="THRESHOLD-ATTEST-EU",
+            queue=queue_label("THRESHOLD-ATTEST-EU"),
             jurisdiction="NL",
-            workload_note="Mocked queue depth: 3 open (light load)",
+            workload_note="Queue depth: 3 open (light load)",
         ),
     },
     "ALT-2026-00828": {
@@ -205,9 +206,9 @@ CASE_EVIDENCE: dict[str, dict[str, Any]] = {
         ],
         "routing": RoutingSuggestion(
             team="FCU Tier-1 APAC Standard",
-            queue="STANDARD-REVIEW-APAC",
+            queue=queue_label("STANDARD-REVIEW-APAC"),
             jurisdiction="KR",
-            workload_note="Mocked queue depth: 8 open (normal load)",
+            workload_note="Queue depth: 8 open (normal load)",
         ),
     },
     "ALT-2026-00822": {
@@ -240,18 +241,18 @@ CASE_EVIDENCE: dict[str, dict[str, Any]] = {
         ],
         "routing": RoutingSuggestion(
             team="FCU Tier-1 NA Velocity",
-            queue="VELOCITY-REVIEW-NA",
+            queue=queue_label("VELOCITY-REVIEW-NA"),
             jurisdiction="CA",
-            workload_note="Mocked queue depth: 6 open (normal load)",
+            workload_note="Queue depth: 6 open (normal load)",
         ),
     },
 }
 
 DEFAULT_ROUTING = RoutingSuggestion(
     team="FCU Tier-1 General",
-    queue="GENERAL-TRIAGE",
-    jurisdiction="UN",
-    workload_note="Mocked queue depth: 9 open (default routing)",
+    queue=queue_label("GENERAL-TRIAGE"),
+    jurisdiction="International",
+    workload_note="Queue depth: 9 open (default routing)",
 )
 
 
@@ -277,8 +278,9 @@ def get_case_evidence(alert_id: str, context: dict[str, Any] | None = None) -> d
         "counterparty_history": f"Limited history for {context['transaction'].get('counterparty', 'counterparty')}.",
         "prior_alerts": int(company.get("prior_cases") or 0),
         "transaction_metadata": (
-            f"{context['transaction'].get('channel', 'channel')}; "
-            f"amount_ratio={float(signals.get('amount_ratio') or context.get('amount_ratio') or 1):.2f}."
+            f"Channel: {context['transaction'].get('channel', 'Not supplied')}; "
+            f"amount versus baseline: "
+            f"{float(signals.get('amount_ratio') or context.get('amount_ratio') or 1):.2f}×."
         ),
         "sanctions_list_version": "Not supplied for this alert",
         "related_transactions": [],

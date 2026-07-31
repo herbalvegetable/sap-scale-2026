@@ -4,6 +4,7 @@ from app.config import Settings
 from app.dependencies import (
     get_case_chat_service,
     get_insights_service,
+    get_performance_chat_service,
     get_repository,
     get_scoring_engine,
     get_vector_store,
@@ -13,6 +14,7 @@ from app.services.actionable_insights import ActionableInsightsService
 from app.services.ai_core_client import AICoreClient
 from app.services.case_chat import CaseChatService
 from app.services.hana_client import HanaClient
+from app.services.performance_chat import PerformanceChatService
 from app.services.repository import RiskRepository
 from app.services.scoring_engine import ScoringEngine
 from app.services.vector_store import HanaVectorStore
@@ -24,11 +26,13 @@ scoring = ScoringEngine(settings, repository, AICoreClient(settings))
 insights = ActionableInsightsService(settings, repository, scoring, AICoreClient(settings))
 vector = HanaVectorStore(settings, HanaClient(settings))
 chat = CaseChatService(settings, repository, scoring, AICoreClient(settings), vector)
+perf_chat = PerformanceChatService(settings, repository, scoring, AICoreClient(settings))
 app.dependency_overrides[get_repository] = lambda: repository
 app.dependency_overrides[get_scoring_engine] = lambda: scoring
 app.dependency_overrides[get_insights_service] = lambda: insights
 app.dependency_overrides[get_vector_store] = lambda: vector
 app.dependency_overrides[get_case_chat_service] = lambda: chat
+app.dependency_overrides[get_performance_chat_service] = lambda: perf_chat
 client = TestClient(app)
 
 
@@ -110,3 +114,37 @@ def test_chat_thread_and_chart_post() -> None:
     reply = posted.json()
     assert reply["chart"]["chart_type"] == "activity_vs_baseline"
     assert reply["chart"]["points"]
+
+
+def test_performance_chat_thread_and_chart_post() -> None:
+    operations = client.get("/api/analytics/operations")
+    assert operations.status_code == 200
+    ops = operations.json()
+
+    thread = client.get("/api/analytics/operations/chat", params={"range_months": 12})
+    assert thread.status_code == 200
+    body = thread.json()
+    assert body["range_months"] == 12
+    assert len(body["suggestions"]) == 3
+
+    chart_prompt = next(item["prompt"] for item in body["suggestions"] if item["id"] == "chart_raised_closed")
+    posted = client.post(
+        "/api/analytics/operations/chat",
+        json={"message": chart_prompt, "range_months": 12},
+    )
+    assert posted.status_code == 200
+    reply = posted.json()
+    assert reply["chart"]["chart_type"] == "raised_vs_closed"
+    assert len(reply["chart"]["points"]) == 12
+    assert reply["chart"]["points"][0]["raised"] == ops["months"][0]["raised"]
+    assert reply["chart"]["points"][-1]["closed"] == ops["months"][-1]["closed"]
+
+    scoped = client.post(
+        "/api/analytics/operations/chat",
+        json={"message": "What is the current backlog?", "range_months": 6},
+    )
+    assert scoped.status_code == 200
+    scoped_body = scoped.json()
+    assert scoped_body["range_months"] == 6
+    assert scoped_body["reply"]
+    assert any(c["kind"] in {"kpi", "definition", "chart", "note", "metric"} for c in scoped_body["citations"])

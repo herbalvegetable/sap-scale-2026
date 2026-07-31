@@ -5,11 +5,14 @@ import {
   ClipboardList,
   GitBranch,
   History,
+  Mail,
+  MessageSquarePlus,
   Route,
   ShieldAlert,
   XCircle,
 } from "lucide-react";
 import type { ActionableInsight, RecommendedAction } from "../lib/types";
+import { humanizeLabel } from "../lib/utils";
 
 const ACTION_LABELS: Record<RecommendedAction, string> = {
   clear: "Clear",
@@ -30,27 +33,56 @@ interface Props {
   deciding: boolean;
   decisionError?: string;
   draftOverride?: string;
-  onApprove: (editedDraftNotes: string) => void;
-  onOverride: (editedDraftNotes: string, reasonCode: string, freeText: string) => void;
+  emailOverride?: string;
+  draftingEmail?: boolean;
+  draftingEmailDecision?: "approved" | "overridden" | "request_further_info";
+  onApprove: (editedDraftNotes: string, editedDraftEmail: string) => void;
+  onOverride: (editedDraftNotes: string, editedDraftEmail: string, reasonCode: string, freeText: string) => void;
+  onRequestFurtherInfo: (editedDraftNotes: string, editedDraftEmail: string) => void;
+  onGenerateEmail: (decision: "approved" | "overridden" | "request_further_info") => void;
 }
+
+const EMAIL_DRAFT_BUTTONS: {
+  decision: "approved" | "overridden" | "request_further_info";
+  label: string;
+}[] = [
+  { decision: "approved", label: "Approve" },
+  { decision: "overridden", label: "Decline" },
+  { decision: "request_further_info", label: "Further questioning" },
+];
 
 export function RecommendationCard({
   insight,
   deciding,
   decisionError,
   draftOverride,
+  emailOverride,
+  draftingEmail,
+  draftingEmailDecision,
   onApprove,
   onOverride,
+  onRequestFurtherInfo,
+  onGenerateEmail,
 }: Props) {
   const [draftNotes, setDraftNotes] = useState(insight.draft_notes);
+  const [draftEmail, setDraftEmail] = useState(insight.draft_email ?? "");
   const [showOverride, setShowOverride] = useState(false);
   const [reasonCode, setReasonCode] = useState(OVERRIDE_REASONS[0].value);
   const [freeText, setFreeText] = useState("");
-  const decided = insight.status === "approved" || insight.status === "overridden" || insight.status === "actioned";
+  const decided =
+    insight.status === "approved" ||
+    insight.status === "overridden" ||
+    insight.status === "actioned" ||
+    insight.status === "further_info_requested";
 
   useEffect(() => {
     if (draftOverride != null) setDraftNotes(draftOverride);
   }, [draftOverride]);
+
+  useEffect(() => {
+    if (emailOverride != null) setDraftEmail(emailOverride);
+    else if (insight.draft_email) setDraftEmail(insight.draft_email);
+  }, [emailOverride, insight.draft_email]);
 
   return (
     <div className="recommendation-card" aria-label="Actionable insight recommendation">
@@ -89,21 +121,21 @@ export function RecommendationCard({
           <small>Distinct from the risk score — estimates exposure growth while unresolved.</small>
         </div>
         <div className={`confidence-pill confidence-pill--${insight.confidence}`}>
-          Confidence: {insight.confidence}
+          Confidence: {humanizeLabel(insight.confidence)}
         </div>
       </div>
 
       <div className="recommendation-section">
         <h4><ClipboardList size={15} /> Evidence summary</h4>
-        <ul>
+        <ol className="evidence-summary-list">
           {insight.evidence.slice(0, 6).map((item) => (
             <li key={`${item.label}-${item.value}`}>
-              <strong>{item.label}</strong>
-              <span>{item.value}</span>
-              <small>{item.source}</small>
+              <div className="evidence-summary-list__title">{humanizeLabel(item.label)}</div>
+              <p>{item.value}</p>
+              <small>{humanizeLabel(item.source)}</small>
             </li>
           ))}
-        </ul>
+        </ol>
       </div>
 
       {insight.precedent_cases.length > 0 && (
@@ -127,20 +159,55 @@ export function RecommendationCard({
         <h4><Route size={15} /> Routing suggestion</h4>
         <p className="routing-line">
           <strong>{insight.routing_suggestion.team}</strong>
-          <span>{insight.routing_suggestion.queue} · {insight.routing_suggestion.jurisdiction}</span>
+          <span>
+            {humanizeLabel(insight.routing_suggestion.queue)} · {insight.routing_suggestion.jurisdiction}
+          </span>
           <small>{insight.routing_suggestion.workload_note}</small>
         </p>
       </div>
 
       <div className="recommendation-section draft-section">
-        <h4><GitBranch size={15} /> Draft investigator notes</h4>
+        <h4><GitBranch size={15} /> Draft case notes</h4>
         <div className="draft-banner">{insight.draft_disclaimer}</div>
         <textarea
+          className="draft-textarea draft-textarea--notes"
           value={draftNotes}
           onChange={(event) => setDraftNotes(event.target.value)}
           disabled={decided || deciding}
-          rows={6}
-          aria-label="Editable draft investigator notes"
+          rows={14}
+          aria-label="Editable draft case notes"
+        />
+      </div>
+
+      <div className="recommendation-section draft-section">
+        <div className="draft-section__heading">
+          <h4><Mail size={15} /> Draft Email</h4>
+        </div>
+        <div className="email-draft-actions" role="group" aria-label="Draft email from decision">
+          <span className="email-draft-actions__label">Draft based on</span>
+          {EMAIL_DRAFT_BUTTONS.map((item) => {
+            const busy = Boolean(draftingEmail && draftingEmailDecision === item.decision);
+            return (
+              <button
+                key={item.decision}
+                type="button"
+                className="ui-button ui-button--outline ui-button--small"
+                disabled={deciding || draftingEmail}
+                onClick={() => onGenerateEmail(item.decision)}
+              >
+                {busy ? "Drafting…" : item.label}
+              </button>
+            );
+          })}
+        </div>
+        <textarea
+          className="draft-textarea draft-textarea--email"
+          value={draftEmail}
+          onChange={(event) => setDraftEmail(event.target.value)}
+          disabled={decided || deciding}
+          rows={18}
+          placeholder="Choose Approve, Decline, or Further questioning to prepare a respectful c-suite email…"
+          aria-label="Editable draft email"
         />
       </div>
 
@@ -150,7 +217,7 @@ export function RecommendationCard({
           <ul>
             {insight.reasoning_trace.filter((item) => item.matched).map((item) => (
               <li key={item.rule_id}>
-                <strong>{item.rule_id}</strong>
+                <strong>{humanizeLabel(item.rule_id)}</strong>
                 <span>{item.note}</span>
               </li>
             ))}
@@ -161,10 +228,17 @@ export function RecommendationCard({
       {decisionError && <div className="inline-error">{decisionError}</div>}
 
       {decided ? (
-        <div className={`decision-result decision-result--${insight.status}`}>
-          {insight.status === "approved" ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+        <div className={`decision-result decision-result--${insight.status === "further_info_requested" ? "overridden" : insight.status}`}>
+          {insight.status === "approved" || insight.status === "further_info_requested" ? (
+            <CheckCircle2 size={16} />
+          ) : (
+            <XCircle size={16} />
+          )}
           <span>
-            Recommendation {insight.status}. No downstream action was automated — human confirmation only.
+            {insight.status === "further_info_requested"
+              ? "Further information requested from the entity. No downstream action was automated."
+              : `Recommendation ${humanizeLabel(insight.status)}. No downstream action was automated — human confirmation only.`}
+            {" "}Last decision audited to the durable session trail (Help & governance).
           </span>
         </div>
       ) : (
@@ -172,10 +246,18 @@ export function RecommendationCard({
           <button
             className="ui-button ui-button--primary ui-button--default"
             disabled={deciding}
-            onClick={() => onApprove(draftNotes)}
+            onClick={() => onApprove(draftNotes, draftEmail)}
           >
             <CheckCircle2 size={16} />
             Approve recommendation
+          </button>
+          <button
+            className="ui-button ui-button--outline ui-button--default"
+            disabled={deciding}
+            onClick={() => onRequestFurtherInfo(draftNotes, draftEmail)}
+          >
+            <MessageSquarePlus size={16} />
+            Prompt entity for further questioning
           </button>
           <button
             className="ui-button ui-button--outline ui-button--default"
@@ -191,7 +273,7 @@ export function RecommendationCard({
       {showOverride && !decided && (
         <div className="override-form">
           <label>
-            Reason code
+            Override reason
             <select value={reasonCode} onChange={(event) => setReasonCode(event.target.value)}>
               {OVERRIDE_REASONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
@@ -210,7 +292,7 @@ export function RecommendationCard({
           <button
             className="ui-button ui-button--primary ui-button--default"
             disabled={deciding || !freeText.trim()}
-            onClick={() => onOverride(draftNotes, reasonCode, freeText.trim())}
+            onClick={() => onOverride(draftNotes, draftEmail, reasonCode, freeText.trim())}
           >
             Submit override
           </button>
@@ -218,7 +300,7 @@ export function RecommendationCard({
       )}
 
       <small className="recommendation-meta">
-        Generated {new Date(insight.generated_at).toLocaleString()} · Status: {insight.status}
+        Generated {new Date(insight.generated_at).toLocaleString()} · Status: {humanizeLabel(insight.status)}
       </small>
     </div>
   );

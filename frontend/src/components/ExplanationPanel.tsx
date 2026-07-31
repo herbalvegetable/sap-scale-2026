@@ -14,8 +14,18 @@ interface Props {
   deciding: boolean;
   decisionError?: string;
   draftOverride?: string;
-  onApprove: (editedDraftNotes: string) => void;
-  onOverride: (editedDraftNotes: string, reasonCode: string, freeText: string) => void;
+  emailOverride?: string;
+  draftingEmail?: boolean;
+  draftingEmailDecision?: "approved" | "overridden" | "request_further_info";
+  onApprove: (editedDraftNotes: string, editedDraftEmail: string) => void;
+  onOverride: (
+    editedDraftNotes: string,
+    editedDraftEmail: string,
+    reasonCode: string,
+    freeText: string,
+  ) => void;
+  onRequestFurtherInfo: (editedDraftNotes: string, editedDraftEmail: string) => void;
+  onGenerateEmail: (decision: "approved" | "overridden" | "request_further_info") => void;
 }
 
 export function ExplanationPanel({
@@ -30,8 +40,13 @@ export function ExplanationPanel({
   deciding,
   decisionError,
   draftOverride,
+  emailOverride,
+  draftingEmail,
+  draftingEmailDecision,
   onApprove,
   onOverride,
+  onRequestFurtherInfo,
+  onGenerateEmail,
 }: Props) {
   return (
     <section className="panel intelligence-panel" aria-labelledby="intelligence-heading">
@@ -69,7 +84,7 @@ export function ExplanationPanel({
             </div>
           </div>
           <div className="recommended-checks">
-            <h3>Recommended investigator checks</h3>
+            <h3>Recommended review checks</h3>
             <ol>{explanation.recommended_checks.map((item) => <li key={item}>{item}</li>)}</ol>
           </div>
           <div className="actionable-insights">
@@ -86,8 +101,13 @@ export function ExplanationPanel({
                 deciding={deciding}
                 decisionError={decisionError}
                 draftOverride={draftOverride}
+                emailOverride={emailOverride}
+                draftingEmail={draftingEmail}
+                draftingEmailDecision={draftingEmailDecision}
                 onApprove={onApprove}
                 onOverride={onOverride}
+                onRequestFurtherInfo={onRequestFurtherInfo}
+                onGenerateEmail={onGenerateEmail}
               />
             )}
           </div>

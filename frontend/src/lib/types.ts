@@ -36,13 +36,23 @@ export interface RiskScore {
   source_fingerprint: string;
 }
 
+export type AlertCaseStatus = "open" | "investigating" | "closed" | "closed_timeout";
+
+export interface IntegrationMeta {
+  source: "hana" | "demo";
+  normalised_status: string;
+  raw_status?: string | null;
+  scored_queue_cap: number;
+  privacy_region: string;
+}
+
 export interface AlertSummary {
   id: string;
   transaction_id: string;
   company_id: string;
   company_name: string;
   alert_type: string;
-  status: string;
+  status: AlertCaseStatus | string;
   status_label: string;
   status_reason: string | null;
   sla_breached: boolean;
@@ -52,6 +62,7 @@ export interface AlertSummary {
   destination_country: string;
   created_at: string;
   score: RiskScore;
+  integration?: IntegrationMeta | null;
 }
 
 export interface AlertDetail extends AlertSummary {
@@ -121,6 +132,42 @@ export interface AlertStats {
   sla_breached: number;
 }
 
+export interface MonthlyOperationsPoint {
+  month: string;
+  raised: number;
+  closed: number;
+  transaction_value_usd: number;
+  sla_breaches: number;
+  false_positives: number;
+  true_positives: number;
+  median_review_hours: number | null;
+}
+
+export interface OperationsKpis {
+  backlog: number;
+  open_alerts: number;
+  investigating: number;
+  median_review_hours: number | null;
+  closure_rate: number;
+  sla_adherence_rate: number;
+  false_positive_rate: number;
+  review_timeout_rate: number;
+  high_priority_unresolved: number;
+  high_priority_exposure_usd: number;
+  unresolved_exposure_usd: number;
+  backlog_change: number;
+  period_raised: number;
+  period_closed: number;
+  scored_queue_size: number;
+}
+
+export interface OperationsDashboard {
+  data_mode: "hana" | "demo";
+  months: MonthlyOperationsPoint[];
+  kpis: OperationsKpis;
+  notes: string[];
+}
+
 export interface Explanation {
   alert_id: string;
   summary: string;
@@ -136,7 +183,13 @@ export interface Explanation {
 }
 
 export type RecommendedAction = "clear" | "escalate_tier2" | "request_kyc" | "draft_sar";
-export type InsightStatus = "generated" | "reviewed" | "approved" | "overridden" | "actioned";
+export type InsightStatus =
+  | "generated"
+  | "reviewed"
+  | "approved"
+  | "overridden"
+  | "actioned"
+  | "further_info_requested";
 export type InsightConfidence = "high" | "medium" | "low";
 
 export interface ReasoningTraceItem {
@@ -179,6 +232,8 @@ export interface ActionableInsight {
   precedent_cases: PrecedentCase[];
   draft_notes: string;
   draft_disclaimer: string;
+  draft_email?: string | null;
+  draft_email_disclaimer?: string;
   routing_suggestion: RoutingSuggestion;
   confidence: InsightConfidence;
   confidence_reason: string;
@@ -190,10 +245,11 @@ export interface ActionableInsight {
 }
 
 export interface InsightDecisionRequest {
-  decision: "approved" | "overridden";
+  decision: "approved" | "overridden" | "request_further_info";
   reason_code?: string | null;
   free_text?: string | null;
   edited_draft_notes?: string | null;
+  edited_draft_email?: string | null;
   actor?: string;
 }
 
@@ -216,8 +272,26 @@ export interface InsightDecisionResponse {
   decision: InsightDecisionRecord;
 }
 
-export type ChatCitationKind = "factor" | "evidence" | "precedent" | "policy" | "case_field" | "chart";
-export type ChatChartType = "activity_vs_baseline" | "factor_breakdown" | "precedent_outcomes";
+export type ChatCitationKind =
+  | "factor"
+  | "evidence"
+  | "precedent"
+  | "policy"
+  | "case_field"
+  | "chart"
+  | "kpi"
+  | "definition"
+  | "note"
+  | "metric";
+export type ChatChartType =
+  | "activity_vs_baseline"
+  | "factor_breakdown"
+  | "precedent_outcomes"
+  | "closed_by_month"
+  | "raised_vs_closed"
+  | "sla_breaches"
+  | "transaction_value";
+export type RangeMonths = 6 | 12;
 
 export interface ChatCitation {
   label: string;
@@ -271,6 +345,28 @@ export interface ChatResponse {
   citations: ChatCitation[];
   chart?: ChatChartSpec | null;
   suggested_draft_snippet?: string | null;
+  suggested_email_draft?: string | null;
+  refused_action: boolean;
+  refusal_reason?: string | null;
+  provenance: "ai" | "fallback";
+  model: string;
+  prompt_version: string;
+  turn_id: string;
+  thread_id: string;
+}
+
+export interface PerformanceChatThreadResponse {
+  range_months: RangeMonths;
+  messages: ChatMessage[];
+  suggestions: ChatSuggestion[];
+  greeting: string;
+}
+
+export interface PerformanceChatResponse {
+  range_months: RangeMonths;
+  reply: string;
+  citations: ChatCitation[];
+  chart?: ChatChartSpec | null;
   refused_action: boolean;
   refusal_reason?: string | null;
   provenance: "ai" | "fallback";
@@ -286,4 +382,22 @@ export interface ServiceHealth {
   hana: "connected" | "unavailable" | "not_configured";
   ai_core: "connected" | "unavailable" | "not_configured";
   model: string;
+}
+
+export type AuditEventType = "insight_decision" | "case_chat" | "performance_chat";
+
+export interface AuditEvent {
+  event_type: AuditEventType;
+  timestamp: string;
+  alert_id?: string | null;
+  actor: string;
+  summary: string;
+  refused_action: boolean;
+  detail: Record<string, unknown>;
+}
+
+export interface AuditPage {
+  items: AuditEvent[];
+  total: number;
+  privacy: Record<string, string>;
 }

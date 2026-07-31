@@ -70,6 +70,20 @@ POLICY_DOCUMENTS = [
         "source": "Country Risk Operating Procedure",
         "tags": "fatf medium geography corridor sla procedure sanctions",
     },
+    {
+        "id": "POL-DATA-RESIDENCY",
+        "title": "Customer data residency and prompt minimisation",
+        "content": "Customer personal data must remain in approved regional environments. For TrustSphere Asia operations, SAP BTP and SAP HANA in the Singapore region are approved. RiskAssess sends only minimised, hashed identifiers to generative models; investigators retain full case context in the application. Free-text payment purposes and beneficial-owner personal attributes are redacted from model prompts.",
+        "source": "Group Data Residency Standard",
+        "tags": "data residency singapore btp privacy pii prompt minimisation hana",
+    },
+    {
+        "id": "POL-MODEL-RISK",
+        "title": "Model risk posture for triage assistance",
+        "content": "Rule-based prioritisation and decision-support workflows follow lighter governance. Any model that would autonomously influence customer outcomes (payment blocking, account restrictions, SAR filing) requires formal Model Risk Management validation before deployment. RiskAssess recommendations remain human-approved decision support only.",
+        "source": "Model Risk Management Standard",
+        "tags": "model risk validation governance human accountability prioritisation",
+    },
 ]
 
 

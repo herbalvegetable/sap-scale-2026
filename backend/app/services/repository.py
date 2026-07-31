@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import json
 import logging
 from threading import Lock
 
-from app.config import Settings
+from app.config import ROOT_DIR, Settings
 from app.models.schemas import (
     ActionableInsight,
+    AuditEvent,
     ChatAuditRecord,
     ChatMessage,
     Explanation,
     InsightDecisionRecord,
+    PerformanceChatAuditRecord,
     RiskScore,
 )
+from app.services.demo_analytics import build_demo_operations_dashboard
 from app.services.demo_data import get_demo_alerts
 from app.services.hana_client import HanaClient
+from app.services.privacy import privacy_meta
 
 logger = logging.getLogger(__name__)
+
+SCORED_QUEUE_CAP = 250
+AUDIT_LOAD_LIMIT = 500
 
 
 class RiskRepository:
@@ -30,9 +38,13 @@ class RiskRepository:
         self._insight_audit_log: list[InsightDecisionRecord] = []
         self._chat_threads: dict[str, list[ChatMessage]] = {}
         self._chat_audit_log: list[ChatAuditRecord] = []
+        self._performance_chat_threads: dict[str, list[ChatMessage]] = {}
+        self._performance_chat_audit_log: list[PerformanceChatAuditRecord] = []
         self._contexts: list[dict] | None = None
         self._lock = Lock()
         self._mode: str | None = None
+        self._audit_path = ROOT_DIR / "backend" / "data" / "audit.jsonl"
+        self._load_audit_from_disk()
 
     @property
     def mode(self) -> str:
@@ -65,11 +77,48 @@ class RiskRepository:
             row["status"] = "investigating" if "REVIEW" in raw_status or "INVESTIGAT" in raw_status else "open"
             row["status_label"] = row["status"].capitalize()
             row["status_reason"] = None
-            row["sla_breached"] = False
+            row["sla_breached"] = bool(row.get("sla_breached", False))
+            row["integration"] = {
+                "source": "demo",
+                "normalised_status": row["status"],
+                "raw_status": raw_status,
+                "scored_queue_cap": SCORED_QUEUE_CAP,
+                "privacy_region": privacy_meta()["region"],
+            }
         return self._contexts
 
     def get_alert_context(self, alert_id: str) -> dict | None:
         return next((row for row in self.all_alert_contexts() if str(row["id"]) == alert_id), None)
+
+    def update_alert_status(self, alert_id: str, status: str) -> dict | None:
+        """Update case status in the in-memory alert context (session-scoped)."""
+        requested = status.lower().strip()
+        allowed = {"open", "investigating", "closed", "closed_timeout"}
+        if requested not in allowed:
+            raise ValueError(f"Unsupported status: {status}")
+        with self._lock:
+            context = self.get_alert_context(alert_id)
+            if context is None:
+                return None
+            if requested == "closed_timeout":
+                context["status"] = "closed"
+                context["status_label"] = "Closed"
+                context["raw_status"] = "CLOSED_FALSE"
+                context["status_reason"] = "Closed – Closed due to expired review timeline"
+                context["sla_breached"] = True
+            elif requested == "closed":
+                context["status"] = "closed"
+                context["status_label"] = "Closed"
+                context["raw_status"] = "CLOSED"
+                context["status_reason"] = "Closed – Resolved by team"
+                context["sla_breached"] = False
+            else:
+                context["status"] = requested
+                context["status_label"] = requested.capitalize()
+                context["raw_status"] = requested.upper()
+                context["status_reason"] = None
+                context["sla_breached"] = False
+            return dict(context)
 
     def _load_hana_alerts(self) -> list[dict]:
         """Map the discovered TrustSphere views to the canonical API shape."""
@@ -164,7 +213,7 @@ class RiskRepository:
                 or "TIMEOUT" in raw_status
                 or (bool(row.get("sla_breached")) and not row.get("resolved_by"))
             ):
-                status_reason = "Closed – Manual review took too long"
+                status_reason = "Closed – Closed due to expired review timeline"
             else:
                 status_reason = "Closed – Resolved by team"
         elif raw_status in {"INVESTIGATING", "IN_REVIEW", "IN REVIEW"}:
@@ -219,6 +268,13 @@ class RiskRepository:
                 "transaction_risk_score": float(row.get("transaction_risk_score") or 0),
                 "behavioral_risk_score": float(row.get("behavioral_risk_score") or 0),
                 "sar_cases": int(row.get("sar_cases") or 0),
+            },
+            "integration": {
+                "source": "hana",
+                "normalised_status": status,
+                "raw_status": raw_status,
+                "scored_queue_cap": SCORED_QUEUE_CAP,
+                "privacy_region": privacy_meta()["region"],
             },
         }
 
@@ -318,6 +374,256 @@ class RiskRepository:
             _ = monthrange(y, m)  # validate calendar month
         return points
 
+    def get_operations_dashboard(self, high_priority_ids: set[str] | None = None) -> dict:
+        """Aggregate 12-month operations KPIs from HANA or deterministic demo history."""
+        contexts = self.all_alert_contexts()
+        open_alerts = sum(str(row.get("status")).lower() == "open" for row in contexts)
+        investigating = sum(str(row.get("status")).lower() == "investigating" for row in contexts)
+        unresolved = [row for row in contexts if str(row.get("status")).lower() in {"open", "investigating"}]
+        unresolved_exposure = sum(float(row.get("amount") or 0) for row in unresolved)
+        priority_ids = high_priority_ids or set()
+        high_unresolved = [row for row in unresolved if str(row.get("id")) in priority_ids]
+        high_exposure = sum(float(row.get("amount") or 0) for row in high_unresolved)
+
+        if self.mode == "hana":
+            try:
+                payload = self._load_hana_operations_dashboard()
+                payload["kpis"].update(
+                    {
+                        "backlog": open_alerts + investigating,
+                        "open_alerts": open_alerts,
+                        "investigating": investigating,
+                        "high_priority_unresolved": len(high_unresolved),
+                        "high_priority_exposure_usd": round(high_exposure, 2),
+                        "unresolved_exposure_usd": round(unresolved_exposure, 2),
+                        "scored_queue_size": len(contexts),
+                    }
+                )
+                payload["data_mode"] = "hana"
+                notes = list(payload.get("notes") or [])
+                notes.append(
+                    f"Backlog KPIs cover the full ops population; the scored work queue is a prioritised "
+                    f"subset (cap {SCORED_QUEUE_CAP}, currently {len(contexts)} cases) so investigators "
+                    "triage highest SLA/regulatory exposure first."
+                )
+                notes.append(
+                    f"High-priority unresolved count uses the scored queue subset ({len(contexts)} recent cases), "
+                    "not the full alert population."
+                )
+                payload["notes"] = notes
+                return payload
+            except Exception as exc:
+                logger.warning("Operations analytics HANA aggregation failed; using demo series: %s", exc)
+
+        return build_demo_operations_dashboard(
+            scored_queue_size=len(contexts),
+            high_priority_unresolved=len(high_unresolved) or 2,
+            high_priority_exposure_usd=round(high_exposure, 2) if high_unresolved else 7_150_000.0,
+            unresolved_exposure_usd=round(unresolved_exposure, 2) if unresolved else 10_667_500.0,
+            open_alerts=open_alerts or 4,
+            investigating=investigating or 2,
+        )
+
+    def _load_hana_operations_dashboard(self) -> dict:
+        schema = self.settings.reference_schema
+        team_schema = self.settings.hana_schema
+        monthly_sql = f"""
+            SELECT * FROM (
+                SELECT
+                    TO_VARCHAR(A.CREATED_AT, 'YYYY-MM') AS MONTH,
+                    COUNT(*) AS RAISED,
+                    SUM(CASE WHEN UPPER(A.STATUS) LIKE 'CLOSED%' THEN 1 ELSE 0 END) AS CLOSED,
+                    COALESCE(SUM(T.AMOUNT_USD), 0) AS TRANSACTION_VALUE_USD,
+                    SUM(CASE WHEN A.SLA_BREACHED = TRUE THEN 1 ELSE 0 END) AS SLA_BREACHES,
+                    SUM(
+                        CASE
+                            WHEN UPPER(COALESCE(A.RESOLUTION_CODE, '')) = 'FALSE_POSITIVE'
+                              OR UPPER(A.STATUS) = 'CLOSED_FALSE'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS FALSE_POSITIVES,
+                    SUM(
+                        CASE
+                            WHEN UPPER(COALESCE(A.RESOLUTION_CODE, '')) = 'TRUE_POSITIVE'
+                              OR UPPER(A.STATUS) = 'CLOSED_TRUE'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS TRUE_POSITIVES,
+                    SUM(CASE WHEN UPPER(A.STATUS) = 'CLOSED_FALSE' THEN 1 ELSE 0 END) AS REVIEW_TIMEOUTS
+                FROM {schema}.RISK_ALERTS A
+                LEFT JOIN {schema}.TRANSACTIONS T ON T.TRANSACTION_ID = A.TRANSACTION_ID
+                WHERE A.CREATED_AT >= ADD_MONTHS(CURRENT_DATE, -11)
+                GROUP BY TO_VARCHAR(A.CREATED_AT, 'YYYY-MM')
+                ORDER BY MONTH DESC
+                LIMIT 12
+            ) RECENT
+            ORDER BY MONTH ASC
+        """
+        monthly_rows = self.hana.query(monthly_sql)
+        review_hours_by_month = self._load_audit_median_review_hours(team_schema)
+
+        months: list[dict] = []
+        for row in monthly_rows:
+            month = str(row.get("month"))
+            months.append(
+                {
+                    "month": month,
+                    "raised": int(row.get("raised") or 0),
+                    "closed": int(row.get("closed") or 0),
+                    "transaction_value_usd": float(row.get("transaction_value_usd") or 0),
+                    "sla_breaches": int(row.get("sla_breaches") or 0),
+                    "false_positives": int(row.get("false_positives") or 0),
+                    "true_positives": int(row.get("true_positives") or 0),
+                    "median_review_hours": review_hours_by_month.get(month),
+                }
+            )
+
+        # Ensure a contiguous 12-month window even if some months have zero alerts.
+        months = self._fill_month_gaps(months, 12)
+
+        totals_sql = f"""
+            SELECT
+                COUNT(*) AS TOTAL_ALERTS,
+                SUM(CASE WHEN UPPER(STATUS) LIKE 'CLOSED%' THEN 1 ELSE 0 END) AS CLOSED_ALERTS,
+                SUM(CASE WHEN UPPER(STATUS) = 'CLOSED_FALSE' THEN 1 ELSE 0 END) AS TIMEOUT_ALERTS,
+                SUM(CASE WHEN SLA_BREACHED = TRUE THEN 1 ELSE 0 END) AS SLA_BREACHES,
+                SUM(
+                    CASE
+                        WHEN UPPER(COALESCE(RESOLUTION_CODE, '')) = 'FALSE_POSITIVE'
+                          OR UPPER(STATUS) = 'CLOSED_FALSE'
+                        THEN 1 ELSE 0
+                    END
+                ) AS FALSE_POSITIVES,
+                SUM(
+                    CASE
+                        WHEN UPPER(COALESCE(RESOLUTION_CODE, '')) = 'TRUE_POSITIVE'
+                          OR UPPER(STATUS) = 'CLOSED_TRUE'
+                        THEN 1 ELSE 0
+                    END
+                ) AS TRUE_POSITIVES
+            FROM {schema}.RISK_ALERTS
+            WHERE CREATED_AT >= ADD_MONTHS(CURRENT_DATE, -11)
+        """
+        totals = self.hana.query(totals_sql)[0]
+        period_raised = int(totals.get("total_alerts") or 0)
+        period_closed = int(totals.get("closed_alerts") or 0)
+        period_fp = int(totals.get("false_positives") or 0)
+        period_tp = int(totals.get("true_positives") or 0)
+        period_sla = int(totals.get("sla_breaches") or 0)
+        timeouts = int(totals.get("timeout_alerts") or 0)
+        latest = months[-1] if months else {"raised": 0, "closed": 0}
+        median_values = [point["median_review_hours"] for point in months if point.get("median_review_hours") is not None]
+        overall_median = median_values[-1] if median_values else None
+
+        return {
+            "data_mode": "hana",
+            "months": months,
+            "kpis": {
+                "backlog": 0,
+                "open_alerts": 0,
+                "investigating": 0,
+                "median_review_hours": overall_median,
+                "closure_rate": round(period_closed / period_raised, 3) if period_raised else 0.0,
+                "sla_adherence_rate": round(1 - (period_sla / period_raised), 3) if period_raised else 0.0,
+                "false_positive_rate": round(period_fp / (period_fp + period_tp), 3) if (period_fp + period_tp) else 0.0,
+                "review_timeout_rate": round(timeouts / period_raised, 3) if period_raised else 0.0,
+                "high_priority_unresolved": 0,
+                "high_priority_exposure_usd": 0.0,
+                "unresolved_exposure_usd": 0.0,
+                "backlog_change": int(latest.get("raised") or 0) - int(latest.get("closed") or 0),
+                "period_raised": period_raised,
+                "period_closed": period_closed,
+                "scored_queue_size": 0,
+            },
+            "notes": [
+                "Closed outcomes are grouped by alert created month because RESOLVED_AT is not reliable for trends.",
+                "Median review hours are derived from TEAM_08.AUDIT_LOG workflow timestamps when available.",
+                "Client-reported AML false-positive baseline is 90–95%; chart shows dataset resolution outcomes.",
+            ],
+        }
+
+    def _load_audit_median_review_hours(self, team_schema: str) -> dict[str, float]:
+        """Median hours from first review action to close/SAR action, by alert created month."""
+        try:
+            rows = self.hana.query(
+                f"""
+                SELECT
+                    TO_VARCHAR(A.CREATED_AT, 'YYYY-MM') AS MONTH,
+                    SECONDS_BETWEEN(MIN(R.ACTION_TIMESTAMP), MAX(C.ACTION_TIMESTAMP)) / 3600.0 AS REVIEW_HOURS
+                FROM {self.settings.reference_schema}.RISK_ALERTS A
+                JOIN {team_schema}.AUDIT_LOG R
+                  ON R.ENTITY_ID = TO_VARCHAR(A.ALERT_ID)
+                 AND UPPER(R.ACTION_TYPE) IN ('REVIEW_ALERT', 'OPEN_CASE')
+                JOIN {team_schema}.AUDIT_LOG C
+                  ON C.ENTITY_ID = TO_VARCHAR(A.ALERT_ID)
+                 AND UPPER(C.ACTION_TYPE) IN ('CLOSE_CASE', 'FILE_SAR', 'DECLINE_SAR', 'ESCALATE_ALERT')
+                 AND C.ACTION_TIMESTAMP >= R.ACTION_TIMESTAMP
+                WHERE A.CREATED_AT >= ADD_MONTHS(CURRENT_DATE, -11)
+                GROUP BY A.ALERT_ID, TO_VARCHAR(A.CREATED_AT, 'YYYY-MM')
+                """
+            )
+        except Exception as exc:
+            logger.warning("Audit-log review duration query unavailable: %s", exc)
+            return {}
+
+        buckets: dict[str, list[float]] = {}
+        for row in rows:
+            month = str(row.get("month"))
+            hours = row.get("review_hours")
+            if hours is None:
+                continue
+            try:
+                value = float(hours)
+            except (TypeError, ValueError):
+                continue
+            if value < 0:
+                continue
+            buckets.setdefault(month, []).append(value)
+
+        medians: dict[str, float] = {}
+        for month, values in buckets.items():
+            values.sort()
+            mid = len(values) // 2
+            if not values:
+                continue
+            if len(values) % 2:
+                medians[month] = round(values[mid], 1)
+            else:
+                medians[month] = round((values[mid - 1] + values[mid]) / 2, 1)
+        return medians
+
+    @staticmethod
+    def _fill_month_gaps(months: list[dict], count: int = 12) -> list[dict]:
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        keyed = {str(item["month"]): item for item in months}
+        filled: list[dict] = []
+        year, month = now.year, now.month
+        for offset in range(count - 1, -1, -1):
+            m = month - offset
+            y = year
+            while m <= 0:
+                m += 12
+                y -= 1
+            key = f"{y:04d}-{m:02d}"
+            filled.append(
+                keyed.get(
+                    key,
+                    {
+                        "month": key,
+                        "raised": 0,
+                        "closed": 0,
+                        "transaction_value_usd": 0.0,
+                        "sla_breaches": 0,
+                        "false_positives": 0,
+                        "true_positives": 0,
+                        "median_review_hours": None,
+                    },
+                )
+            )
+        return filled
+
     def get_score(self, alert_id: str) -> RiskScore | None:
         return self._scores.get(alert_id)
 
@@ -345,6 +651,12 @@ class RiskRepository:
     def append_insight_decision(self, record: InsightDecisionRecord) -> None:
         with self._lock:
             self._insight_audit_log.append(record)
+            self._persist_audit_event(
+                {
+                    "event_type": "insight_decision",
+                    "payload": record.model_dump(mode="json"),
+                }
+            )
 
     def list_insight_decisions(self, alert_id: str | None = None) -> list[InsightDecisionRecord]:
         if alert_id is None:
@@ -362,8 +674,142 @@ class RiskRepository:
     def append_chat_audit(self, record: ChatAuditRecord) -> None:
         with self._lock:
             self._chat_audit_log.append(record)
+            self._persist_audit_event(
+                {
+                    "event_type": "case_chat",
+                    "payload": record.model_dump(mode="json"),
+                }
+            )
 
     def list_chat_audit(self, alert_id: str | None = None) -> list[ChatAuditRecord]:
         if alert_id is None:
             return list(self._chat_audit_log)
         return [item for item in self._chat_audit_log if item.alert_id == alert_id]
+
+    def get_performance_chat_thread(self, thread_id: str) -> list[ChatMessage]:
+        return list(self._performance_chat_threads.get(thread_id, []))
+
+    def append_performance_chat_messages(self, thread_id: str, messages: list[ChatMessage]) -> None:
+        with self._lock:
+            thread = self._performance_chat_threads.setdefault(thread_id, [])
+            thread.extend(messages)
+
+    def append_performance_chat_audit(self, record: PerformanceChatAuditRecord) -> None:
+        with self._lock:
+            self._performance_chat_audit_log.append(record)
+            self._persist_audit_event(
+                {
+                    "event_type": "performance_chat",
+                    "payload": record.model_dump(mode="json"),
+                }
+            )
+
+    def list_performance_chat_audit(self, thread_id: str | None = None) -> list[PerformanceChatAuditRecord]:
+        if thread_id is None:
+            return list(self._performance_chat_audit_log)
+        return [item for item in self._performance_chat_audit_log if item.thread_id == thread_id]
+
+    def list_audit_events(self, *, alert_id: str | None = None, limit: int = 50) -> list[AuditEvent]:
+        events: list[AuditEvent] = []
+        for record in self._insight_audit_log:
+            events.append(
+                AuditEvent(
+                    event_type="insight_decision",
+                    timestamp=record.decided_at,
+                    alert_id=record.alert_id,
+                    actor=record.actor,
+                    summary=f"Decision {record.decision} → {record.resulting_status}",
+                    refused_action=False,
+                    detail={
+                        "insight_id": record.insight_id,
+                        "decision": record.decision,
+                        "reason_code": record.reason_code,
+                        "previous_status": record.previous_status,
+                        "resulting_status": record.resulting_status,
+                    },
+                )
+            )
+        for record in self._chat_audit_log:
+            events.append(
+                AuditEvent(
+                    event_type="case_chat",
+                    timestamp=record.created_at,
+                    alert_id=record.alert_id,
+                    actor=record.actor,
+                    summary=(
+                        "Case chat action refused"
+                        if record.refused_action
+                        else "Case chat turn recorded"
+                    ),
+                    refused_action=record.refused_action,
+                    detail={
+                        "turn_id": record.turn_id,
+                        "user_message": record.user_message[:160],
+                        "chart_type": record.chart_type,
+                    },
+                )
+            )
+        for record in self._performance_chat_audit_log:
+            events.append(
+                AuditEvent(
+                    event_type="performance_chat",
+                    timestamp=record.created_at,
+                    alert_id=None,
+                    actor=record.actor,
+                    summary=(
+                        "Performance chat action refused"
+                        if record.refused_action
+                        else "Performance chat turn recorded"
+                    ),
+                    refused_action=record.refused_action,
+                    detail={
+                        "turn_id": record.turn_id,
+                        "thread_id": record.thread_id,
+                        "range_months": record.range_months,
+                        "user_message": record.user_message[:160],
+                    },
+                )
+            )
+        if alert_id:
+            events = [event for event in events if event.alert_id == alert_id]
+        events.sort(key=lambda item: item.timestamp, reverse=True)
+        return events[: max(1, min(limit, 200))]
+
+    def _persist_audit_event(self, envelope: dict) -> None:
+        try:
+            self._audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(envelope, default=str) + "\n")
+        except OSError as exc:
+            logger.warning("Could not persist audit event: %s", exc)
+
+    def _load_audit_from_disk(self) -> None:
+        path = self._audit_path
+        if not path.exists():
+            return
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            logger.warning("Could not load audit log: %s", exc)
+            return
+        for line in lines[-AUDIT_LOAD_LIMIT:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                envelope = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event_type = envelope.get("event_type")
+            payload = envelope.get("payload") or {}
+            try:
+                if event_type == "insight_decision":
+                    self._insight_audit_log.append(InsightDecisionRecord.model_validate(payload))
+                elif event_type == "case_chat":
+                    self._chat_audit_log.append(ChatAuditRecord.model_validate(payload))
+                elif event_type == "performance_chat":
+                    self._performance_chat_audit_log.append(
+                        PerformanceChatAuditRecord.model_validate(payload)
+                    )
+            except Exception as exc:
+                logger.debug("Skipping corrupt audit row: %s", exc)

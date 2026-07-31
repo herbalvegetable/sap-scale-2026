@@ -9,6 +9,8 @@ from app.config import Settings
 from app.models.schemas import EvidenceItem, Explanation
 from app.services.ai_core_client import AICoreClient, AICoreError
 from app.services.confidence_assessor import targeted_investigator_checks
+from app.services.privacy import redact_for_llm
+from app.services.prompt_guard import injection_system_addendum, wrap_untrusted
 from app.services.repository import RiskRepository
 from app.services.scoring_engine import ScoringEngine
 from app.services.vector_store import HanaVectorStore
@@ -50,16 +52,21 @@ class ModelExplanation(BaseModel):
         return normalized
 
 
-EXPLANATION_SYSTEM_PROMPT = """
+EXPLANATION_SYSTEM_PROMPT = (
+    """
 You are RiskAssess, a financial-crime investigation support assistant. Create a
 concise, neutral explanation using only the supplied alert context and factor
 evidence. Do not claim criminality, invent facts, or recommend an automatic SAR,
 payment block, account closure, or other adverse customer action. Return JSON
 only with summary, key_drivers, mitigating_factors, recommended_checks, and
-limitations. Explain why the alert deserves its queue priority, cite concrete
-values in prose, identify missing data, and state that a human investigator is
-accountable for disposition.
+limitations. Write every field in plain English for an executive reader — never
+snake_case keys, key=value dumps, or backend identifiers. Explain why the alert
+deserves its queue priority, cite concrete values in prose, identify missing data,
+and state that a human reviewer remains accountable for disposition.
 """.strip()
+    + "\n"
+    + injection_system_addendum()
+)
 
 
 class RiskIntelligenceService:
@@ -85,26 +92,36 @@ class RiskIntelligenceService:
         if cached and not refresh:
             return cached.model_copy(update={"provenance": "cached"})
 
-        score = self.scoring.score_alert(alert_id, refresh=refresh)
+        score = self.scoring.score_alert(alert_id, refresh=False, use_ai=False)
         citations = [evidence for factor in score.factors for evidence in factor.evidence]
-        payload = {
-            "alert": {
-                "id": context["id"],
-                "type": context["alert_type"],
-                "description": context["description"],
-                "status": context["status"],
-            },
-            "transaction": {
-                "amount": context["amount"],
-                "currency": context["currency"],
-                "origin_country": context["origin_country"],
-                "destination_country": context["destination_country"],
-                **context["transaction"],
-            },
-            "company": context["company"],
-            "score": score.model_dump(mode="json"),
-            "retrieved_policy_context": self._retrieve_policy_context(context),
-        }
+        policy_hits = self._retrieve_policy_context(context)
+        payload = redact_for_llm(
+            {
+                "alert": {
+                    "id": context["id"],
+                    "type": context["alert_type"],
+                    "description": context["description"],
+                    "status": context["status"],
+                },
+                "transaction": {
+                    "amount": context["amount"],
+                    "currency": context["currency"],
+                    "origin_country": context["origin_country"],
+                    "destination_country": context["destination_country"],
+                    **context["transaction"],
+                },
+                "company_name": context.get("company_name"),
+                "company": context["company"],
+                "score": score.model_dump(mode="json"),
+                "retrieved_policy_context": [
+                    {
+                        **hit,
+                        "content": wrap_untrusted("policy", str(hit.get("content") or "")),
+                    }
+                    for hit in policy_hits
+                ],
+            }
+        )
 
         try:
             generated = ModelExplanation.model_validate(
@@ -166,12 +183,14 @@ class RiskIntelligenceService:
             mitigations.append("No PEP flag is present in the supplied entity profile.")
         if not mitigations:
             mitigations.append("No material mitigating entity flags were present in the supplied data.")
+        from app.services.presentable import tier_label
+
         return ModelExplanation(
             summary=(
-                f"This alert is prioritised as {tier.upper()} with a score of {total:g}/100. "
+                f"This alert is prioritised as {tier_label(tier)} with a score of {total:g}/100. "
                 f"The transfer of {context['currency']} {context['amount']:,.0f} from "
                 f"{context['origin_country']} to {context['destination_country']} requires "
-                "investigator review because the strongest supplied factors are "
+                "human review because the strongest supplied factors are "
                 f"{ranked[0].label.lower()} and {ranked[1].label.lower()}."
             ),
             key_drivers=key_drivers,
@@ -183,7 +202,7 @@ class RiskIntelligenceService:
             ],
             limitations=[
                 "This explanation uses only the data fields supplied to RiskAssess.",
-                "The output is decision support; a human investigator remains accountable for disposition.",
+                "The output is decision support; a human reviewer remains accountable for disposition.",
             ],
         )
 

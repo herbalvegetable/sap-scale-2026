@@ -17,15 +17,39 @@ import {
   UserRoundCheck,
 } from "lucide-react";
 import { api } from "../lib/api";
-import type { ActionableInsight } from "../lib/types";
+import type { ActionableInsight, AlertCaseStatus } from "../lib/types";
 import { humanizeLabel } from "../lib/utils";
 import { BusinessFolderAnnex } from "./BusinessFolderAnnex";
 import { CaseAssistantWidget } from "./CaseAssistantWidget";
 import { ExplanationPanel } from "./ExplanationPanel";
 import { RiskBreakdown } from "./RiskBreakdown";
 import { RiskScoreGauge } from "./RiskScoreGauge";
-import { StatusBadge, TierBadge } from "./AlertTable";
+import { TierBadge } from "./AlertTable";
 import { TransactionActivityChart } from "./TransactionActivityChart";
+
+const CASE_STATUSES: { value: AlertCaseStatus; label: string }[] = [
+  { value: "open", label: "Open" },
+  { value: "investigating", label: "Investigating" },
+  { value: "closed", label: "Closed – Resolved by team" },
+  { value: "closed_timeout", label: "Closed – Closed due to expired review timeline" },
+];
+
+function selectedCaseStatus(alert: { status: string; status_reason: string | null }): AlertCaseStatus {
+  if (alert.status === "closed") {
+    const reason = alert.status_reason ?? "";
+    if (
+      reason.includes("expired review timeline") ||
+      reason.includes("Manual review took too long") ||
+      reason.includes("Auto-timeout")
+    ) {
+      return "closed_timeout";
+    }
+    return "closed";
+  }
+  if (alert.status === "investigating") return "investigating";
+  if (alert.status === "open") return "open";
+  return "open";
+}
 
 const money = (value: number, code: string) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: code, maximumFractionDigits: 0 }).format(value);
@@ -36,9 +60,11 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
   const [annexOpen, setAnnexOpen] = useState(false);
   const [actionableInsight, setActionableInsight] = useState<ActionableInsight>();
   const [draftOverride, setDraftOverride] = useState<string>();
+  const [emailOverride, setEmailOverride] = useState<string>();
   useEffect(() => {
     setActionableInsight(undefined);
     setDraftOverride(undefined);
+    setEmailOverride(undefined);
   }, [alertId]);
   const alert = useQuery({ queryKey: ["alert", alertId], queryFn: () => api.alert(alertId) });
   const explanation = useQuery({
@@ -48,7 +74,11 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
   });
   const refreshScore = useMutation({
     mutationFn: () => api.refreshScore(alertId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["alert", alertId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alert", alertId] });
+      queryClient.invalidateQueries({ queryKey: ["alerts"] });
+      queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
   });
   const refreshExplanation = useMutation({
     mutationFn: () => api.refreshExplanation(alertId),
@@ -60,18 +90,39 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
   });
   const decideInsight = useMutation({
     mutationFn: (payload: {
-      decision: "approved" | "overridden";
+      decision: "approved" | "overridden" | "request_further_info";
       edited_draft_notes: string;
+      edited_draft_email?: string;
       reason_code?: string;
       free_text?: string;
     }) =>
       api.decideInsight(alertId, {
         decision: payload.decision,
         edited_draft_notes: payload.edited_draft_notes,
+        edited_draft_email: payload.edited_draft_email,
         reason_code: payload.reason_code,
         free_text: payload.free_text,
       }),
-    onSuccess: (data) => setActionableInsight(data.insight),
+    onSuccess: (data) => {
+      setActionableInsight(data.insight);
+      if (data.insight.draft_email) setEmailOverride(data.insight.draft_email);
+    },
+  });
+  const draftEmail = useMutation({
+    mutationFn: (decision: "approved" | "overridden" | "request_further_info") =>
+      api.draftInsightEmail(alertId, decision),
+    onSuccess: (data) => {
+      setActionableInsight(data);
+      if (data.draft_email) setEmailOverride(data.draft_email);
+    },
+  });
+  const updateStatus = useMutation({
+    mutationFn: (status: AlertCaseStatus) => api.updateAlertStatus(alertId, status),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["alert", alertId], data);
+      queryClient.invalidateQueries({ queryKey: ["alerts"] });
+      queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
   });
 
   if (alert.isLoading) {
@@ -107,7 +158,22 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
             <TierBadge tier={data.score.tier} />
             <span>{data.id}</span>
             <span>·</span>
-            <StatusBadge alert={data} />
+            <label className="status-control">
+              <span>Status</span>
+              <select
+                value={selectedCaseStatus(data)}
+                disabled={updateStatus.isPending}
+                aria-label="Change case status"
+                onChange={(event) => updateStatus.mutate(event.target.value as AlertCaseStatus)}
+              >
+                {CASE_STATUSES.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            {updateStatus.isError && (
+              <small className="status-control__error">{updateStatus.error.message}</small>
+            )}
           </div>
           <h1>{data.company_name}</h1>
           <p>{humanizeLabel(data.alert_type)} — {data.description}</p>
@@ -120,7 +186,7 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
         <div className="hero-score">
           <RiskScoreGauge score={data.score.total} tier={data.score.tier} />
           <div>
-            <strong>{data.score.tier.toUpperCase()} PRIORITY</strong>
+            <strong>{humanizeLabel(data.score.tier)} priority</strong>
             <span>Priority assessed · {new Date(data.score.generated_at).toLocaleString()}</span>
             <button
               className="text-button"
@@ -133,7 +199,7 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
               <div className={`hero-confidence hero-confidence--${data.score.confidence.level}`}>
                 <div className="hero-confidence__header">
                   <span className="hero-confidence__pill">
-                    Data confidence: {data.score.confidence.level}
+                    Data confidence: {humanizeLabel(data.score.confidence.level)}
                   </span>
                 </div>
                 <ul>
@@ -207,17 +273,33 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
           deciding={decideInsight.isPending}
           decisionError={decideInsight.error?.message}
           draftOverride={draftOverride}
-          onApprove={(editedDraftNotes) =>
-            decideInsight.mutate({ decision: "approved", edited_draft_notes: editedDraftNotes })
+          emailOverride={emailOverride}
+          draftingEmail={draftEmail.isPending}
+          draftingEmailDecision={draftEmail.variables}
+          onApprove={(editedDraftNotes, editedDraftEmail) =>
+            decideInsight.mutate({
+              decision: "approved",
+              edited_draft_notes: editedDraftNotes,
+              edited_draft_email: editedDraftEmail,
+            })
           }
-          onOverride={(editedDraftNotes, reasonCode, freeText) =>
+          onOverride={(editedDraftNotes, editedDraftEmail, reasonCode, freeText) =>
             decideInsight.mutate({
               decision: "overridden",
               edited_draft_notes: editedDraftNotes,
+              edited_draft_email: editedDraftEmail,
               reason_code: reasonCode,
               free_text: freeText,
             })
           }
+          onRequestFurtherInfo={(editedDraftNotes, editedDraftEmail) =>
+            decideInsight.mutate({
+              decision: "request_further_info",
+              edited_draft_notes: editedDraftNotes,
+              edited_draft_email: editedDraftEmail,
+            })
+          }
+          onGenerateEmail={(decision) => draftEmail.mutate(decision)}
         />
       </div>
       <BusinessFolderAnnex open={annexOpen} onClose={() => setAnnexOpen(false)} />
@@ -228,6 +310,12 @@ export function AlertDetailView({ alertId, onBack }: { alertId: string; onBack: 
           setDraftOverride(snippet);
           if (actionableInsight) {
             setActionableInsight({ ...actionableInsight, draft_notes: snippet });
+          }
+        }}
+        onInsertEmail={(email) => {
+          setEmailOverride(email);
+          if (actionableInsight) {
+            setActionableInsight({ ...actionableInsight, draft_email: email });
           }
         }}
       />

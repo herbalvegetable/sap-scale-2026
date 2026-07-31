@@ -1,5 +1,6 @@
 import { ShieldCheck } from "lucide-react";
 import type { FactorScore, RiskTier } from "../lib/types";
+import { humanizeLabel } from "../lib/utils";
 
 function formatEvidenceValue(label: string, value: string) {
   if (!/ratio/i.test(label) && !/×/.test(value)) return value;
@@ -44,7 +45,7 @@ export function RiskBreakdown({ factors }: { factors: FactorScore[] }) {
                 <div className="evidence-row">
                   {factor.evidence.map((item) => (
                     <span className="evidence-chip" key={`${item.source}-${item.label}`}>
-                      {item.label}:{" "}
+                      {humanizeLabel(item.label)} ({humanizeLabel(item.source)}):{" "}
                       <b>
                         {isTransactionBehaviour || /ratio/i.test(item.label)
                           ? formatEvidenceValue(item.label, item.value)

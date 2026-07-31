@@ -6,7 +6,7 @@
 - **Investigations scope:** implemented as a read-only filtered case list with the same search, column filters, sorting, and Business Folder links as the main queue. Workflow mutation was deliberately excluded because no approved assignment/disposition write API was provided.
 - **Column filters:** implemented as an expandable filter row. Filters combine with AND logic. Categorical, text, numeric-range, and date-range controls are used according to the column data type.
 - **Colour scheme:** blue `#2563EB` is the application primary on a white background. Semantic risk colours remain green/orange/red. Statuses include both icons and text, so meaning does not rely on colour.
-- **Closed status:** HANA `CLOSED_*` values are normalised to `closed`. A resolver or a closed outcome maps to “Closed – Resolved by team”; an explicit timeout or SLA breach without a resolver maps to “Closed – Auto-timeout.”
+- **Closed status:** HANA `CLOSED_*` values are normalised to `closed`. A resolver or a closed outcome maps to “Closed – Resolved by team”; an explicit timeout or SLA breach without a resolver maps to “Closed – Closed due to expired review timeline.”
 
 ## Business Folder
 

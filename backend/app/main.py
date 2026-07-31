@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.dependencies import get_ai_core, get_hana, get_repository
 from app.models.schemas import ServiceHealth
-from app.routers import alerts, chat, entities, insights, intelligence
+from app.routers import alerts, analytics, audit, chat, entities, insights, intelligence
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -29,6 +29,8 @@ app.add_middleware(
 
 api = APIRouter(prefix="/api")
 api.include_router(alerts.router)
+api.include_router(analytics.router)
+api.include_router(audit.router)
 api.include_router(intelligence.router)
 api.include_router(insights.router)
 api.include_router(chat.router)

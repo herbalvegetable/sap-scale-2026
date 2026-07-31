@@ -61,6 +61,14 @@ class RiskScore(BaseModel):
     source_fingerprint: str
 
 
+class IntegrationMeta(BaseModel):
+    source: Literal["hana", "demo"]
+    normalised_status: str
+    raw_status: str | None = None
+    scored_queue_cap: int = 250
+    privacy_region: str = "AP-Southeast (Singapore BTP)"
+
+
 class AlertSummary(BaseModel):
     id: str
     transaction_id: str
@@ -77,6 +85,15 @@ class AlertSummary(BaseModel):
     destination_country: str
     created_at: datetime
     score: RiskScore
+    integration: IntegrationMeta | None = None
+
+
+AlertCaseStatus = Literal["open", "investigating", "closed", "closed_timeout"]
+
+
+class AlertStatusUpdate(BaseModel):
+    status: AlertCaseStatus
+    actor: str = "Amelia Reyes, Group Chief Risk Officer"
 
 
 class TransactionDetail(BaseModel):
@@ -154,6 +171,42 @@ class AlertStats(BaseModel):
     sla_breached: int
 
 
+class MonthlyOperationsPoint(BaseModel):
+    month: str
+    raised: int
+    closed: int
+    transaction_value_usd: float
+    sla_breaches: int
+    false_positives: int
+    true_positives: int
+    median_review_hours: float | None = None
+
+
+class OperationsKpis(BaseModel):
+    backlog: int
+    open_alerts: int
+    investigating: int
+    median_review_hours: float | None = None
+    closure_rate: float
+    sla_adherence_rate: float
+    false_positive_rate: float
+    review_timeout_rate: float
+    high_priority_unresolved: int
+    high_priority_exposure_usd: float
+    unresolved_exposure_usd: float
+    backlog_change: int
+    period_raised: int
+    period_closed: int
+    scored_queue_size: int
+
+
+class OperationsDashboard(BaseModel):
+    data_mode: Literal["hana", "demo"]
+    months: list[MonthlyOperationsPoint]
+    kpis: OperationsKpis
+    notes: list[str] = Field(default_factory=list)
+
+
 class Explanation(BaseModel):
     alert_id: str
     summary: str
@@ -177,10 +230,17 @@ class ServiceHealth(BaseModel):
 
 
 RecommendedAction = Literal["clear", "escalate_tier2", "request_kyc", "draft_sar"]
-InsightStatus = Literal["generated", "reviewed", "approved", "overridden", "actioned"]
+InsightStatus = Literal[
+    "generated",
+    "reviewed",
+    "approved",
+    "overridden",
+    "actioned",
+    "further_info_requested",
+]
 InsightConfidence = Literal["high", "medium", "low"]
 InsightProvenance = Literal["rules+ai", "rules+fallback"]
-InsightDecision = Literal["approved", "overridden"]
+InsightDecision = Literal["approved", "overridden", "request_further_info"]
 
 
 class ReasoningTraceItem(BaseModel):
@@ -222,7 +282,9 @@ class ActionableInsight(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     precedent_cases: list[PrecedentCase] = Field(default_factory=list)
     draft_notes: str
-    draft_disclaimer: str = "DRAFT — requires human edit/approval. Not submitted."
+    draft_disclaimer: str = "Draft only — review and approve before submitting."
+    draft_email: str | None = None
+    draft_email_disclaimer: str = ""
     routing_suggestion: RoutingSuggestion
     confidence: InsightConfidence
     confidence_reason: str
@@ -238,7 +300,13 @@ class InsightDecisionRequest(BaseModel):
     reason_code: str | None = None
     free_text: str | None = None
     edited_draft_notes: str | None = None
-    actor: str = "Amelia Reyes"
+    edited_draft_email: str | None = None
+    actor: str = "Amelia Reyes, Group Chief Risk Officer"
+
+
+class InsightEmailDraftRequest(BaseModel):
+    decision: InsightDecision = "approved"
+    actor: str = "Amelia Reyes, Group Chief Risk Officer"
 
 
 class InsightDecisionRecord(BaseModel):
@@ -260,11 +328,30 @@ class InsightDecisionResponse(BaseModel):
     decision: InsightDecisionRecord
 
 
-ChatCitationKind = Literal["factor", "evidence", "precedent", "policy", "case_field", "chart"]
+ChatCitationKind = Literal[
+    "factor",
+    "evidence",
+    "precedent",
+    "policy",
+    "case_field",
+    "chart",
+    "kpi",
+    "definition",
+    "note",
+]
 ChatRole = Literal["user", "assistant", "system"]
-ChatChartType = Literal["activity_vs_baseline", "factor_breakdown", "precedent_outcomes"]
+ChatChartType = Literal[
+    "activity_vs_baseline",
+    "factor_breakdown",
+    "precedent_outcomes",
+    "closed_by_month",
+    "raised_vs_closed",
+    "sla_breaches",
+    "transaction_value",
+]
 ChatSeriesType = Literal["bar", "line"]
 ChatProvenance = Literal["ai", "fallback"]
+RangeMonths = Literal[6, 12]
 
 
 class ChatCitation(BaseModel):
@@ -323,6 +410,7 @@ class ChatResponse(BaseModel):
     citations: list[ChatCitation] = Field(default_factory=list)
     chart: ChatChartSpec | None = None
     suggested_draft_snippet: str | None = None
+    suggested_email_draft: str | None = None
     refused_action: bool = False
     refusal_reason: str | None = None
     provenance: ChatProvenance
@@ -340,6 +428,65 @@ class ChatAuditRecord(BaseModel):
     citations: list[ChatCitation] = Field(default_factory=list)
     chart_type: ChatChartType | None = None
     refused_action: bool = False
-    actor: str = "Amelia Reyes"
+    actor: str = "Amelia Reyes, Group Chief Risk Officer"
     created_at: datetime
     framing: str = "decision_quality_audit"
+
+
+class PerformanceChatThreadResponse(BaseModel):
+    range_months: RangeMonths
+    messages: list[ChatMessage] = Field(default_factory=list)
+    suggestions: list[ChatSuggestion]
+    greeting: str
+
+
+class PerformanceChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    range_months: RangeMonths = 12
+
+
+class PerformanceChatResponse(BaseModel):
+    range_months: RangeMonths
+    reply: str
+    citations: list[ChatCitation] = Field(default_factory=list)
+    chart: ChatChartSpec | None = None
+    refused_action: bool = False
+    refusal_reason: str | None = None
+    provenance: ChatProvenance
+    model: str
+    prompt_version: str
+    turn_id: str
+    thread_id: str
+
+
+class PerformanceChatAuditRecord(BaseModel):
+    turn_id: str
+    thread_id: str
+    range_months: RangeMonths
+    user_message: str
+    assistant_reply: str
+    citations: list[ChatCitation] = Field(default_factory=list)
+    chart_type: ChatChartType | None = None
+    refused_action: bool = False
+    actor: str = "Amelia Reyes, Group Chief Risk Officer"
+    created_at: datetime
+    framing: str = "operations_decision_support"
+
+
+AuditEventType = Literal["insight_decision", "case_chat", "performance_chat"]
+
+
+class AuditEvent(BaseModel):
+    event_type: AuditEventType
+    timestamp: datetime
+    alert_id: str | None = None
+    actor: str
+    summary: str
+    refused_action: bool = False
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
+class AuditPage(BaseModel):
+    items: list[AuditEvent]
+    total: int
+    privacy: dict[str, str] = Field(default_factory=dict)

@@ -3,9 +3,10 @@ import { BarChart3, Bell, CircleHelp, LayoutDashboard, SearchCheck, Settings, Sh
 import { AlertDetailView } from "./components/AlertDetailView";
 import { Dashboard } from "./components/Dashboard";
 import { HelpGovernancePage } from "./components/HelpGovernancePage";
+import { PerformanceDashboard } from "./components/PerformanceDashboard";
 import { SettingsPage, type ThemeMode } from "./components/SettingsPage";
 
-type AppView = "dashboard" | "investigations" | "help" | "settings";
+type AppView = "dashboard" | "investigations" | "analytics" | "help" | "settings";
 
 function readStoredTheme(): ThemeMode {
   const stored = window.localStorage.getItem("riskassess-theme");
@@ -41,7 +42,9 @@ export default function App() {
           <button className={!selectedAlert && view === "investigations" ? "active" : ""} onClick={() => goTo("investigations")}>
             <SearchCheck size={19} /> Investigations
           </button>
-          <button type="button"><BarChart3 size={19} /> Risk analytics</button>
+          <button className={!selectedAlert && view === "analytics" ? "active" : ""} onClick={() => goTo("analytics")}>
+            <BarChart3 size={19} /> Performance dashboard
+          </button>
         </nav>
         <div className="sidebar__bottom">
           <button className={!selectedAlert && view === "help" ? "active" : ""} onClick={() => goTo("help")}>
@@ -52,7 +55,7 @@ export default function App() {
           </button>
           <div className="analyst">
             <div>AR</div>
-            <span><strong>Amelia Reyes</strong><small>Senior investigator</small></span>
+            <span><strong>Amelia Reyes</strong><small>Group Chief Risk Officer</small></span>
             <Bell size={17} />
           </div>
         </div>
@@ -64,6 +67,8 @@ export default function App() {
           <HelpGovernancePage />
         ) : view === "settings" ? (
           <SettingsPage theme={theme} onThemeChange={setTheme} />
+        ) : view === "analytics" ? (
+          <PerformanceDashboard />
         ) : (
           <Dashboard onSelectAlert={setSelectedAlert} investigationsOnly={view === "investigations"} />
         )}

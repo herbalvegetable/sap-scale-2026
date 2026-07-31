@@ -21,31 +21,40 @@ from app.models.schemas import (
 )
 from app.services.ai_core_client import AICoreClient, AICoreError
 from app.services.case_evidence import get_case_evidence
+from app.services.presentable import (
+    ACTION_LABELS,
+    action_label,
+    confidence_label,
+    factor_label,
+    tier_label,
+    yes_no,
+)
+from app.services.privacy import redact_for_llm
+from app.services.prompt_guard import injection_system_addendum
 from app.services.repository import RiskRepository
 from app.services.scoring_engine import ScoringEngine
 
 logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "insights-1.0"
-DRAFT_DISCLAIMER = "DRAFT — requires human edit/approval. Not submitted."
+DRAFT_DISCLAIMER = "Draft only — review and approve before submitting."
 
-ACTION_LABELS: dict[str, str] = {
-    "clear": "Clear",
-    "escalate_tier2": "Escalate to Tier 2",
-    "request_kyc": "Request Additional KYC/Info",
-    "draft_sar": "Draft SAR",
-}
-
-SYNTHESIS_SYSTEM_PROMPT = """
+SYNTHESIS_SYSTEM_PROMPT = (
+    """
 You are RiskAssess workflow synthesis. The recommended_action, urgency_score, and
 confidence are already decided by transparent rules and MUST NOT be changed.
 Using only the supplied risk factors, evidence, and precedent context, return JSON
-with: rationale (2-4 sentences citing specific factor keys such as entity_risk),
-draft_notes (investigator narrative draft), evidence_labels (short list of label
-strings highlighting the strongest supporting data points). Do not invent facts,
-claim criminality, or imply the recommendation has been executed. Never recommend
-autonomous SAR filing, payment blocking, or alert closure.
+with: rationale (2-4 sentences in plain English citing factor display names such as
+“Entity risk profile”, never snake_case keys),
+draft_notes (internal case narrative draft in the voice of Amelia Reyes, Group Chief Risk Officer;
+plain English only — no code identifiers, no key=value dumps, no JSON),
+evidence_labels (short list of plain-English labels highlighting the strongest supporting data points).
+Do not invent facts, claim criminality, or imply the recommendation has been executed.
+Never recommend autonomous SAR filing, payment blocking, or alert closure.
 """.strip()
+    + "\n"
+    + injection_system_addendum()
+)
 
 
 class ModelSynthesis(BaseModel):
@@ -80,13 +89,13 @@ class ActionableInsightsService:
         if cached and cached.source_fingerprint == fingerprint and not refresh:
             return cached.model_copy(update={"status": cached.status})
 
-        score = self.scoring.score_alert(alert_id, refresh=False, use_ai=True)
+        score = self.scoring.score_alert(alert_id, refresh=False, use_ai=False)
         case_data = self._case_evidence(alert_id, context)
         action, trace = self._recommend_action(context, score)
         urgency_score, urgency_breakdown = self._urgency_score(context, score)
         confidence = score.confidence.level
         confidence_reason = "; ".join(score.confidence.reasons) or (
-            f"Overall confidence is {score.confidence.level} based on key driving factor data quality."
+            f"Overall confidence is {confidence_label(score.confidence.level)} based on key driving factor data quality."
         )
 
         # Low-confidence abstain: avoid forcing strong Clear/SAR when evidence is weak.
@@ -96,7 +105,10 @@ class ActionableInsightsService:
                     rule_id="CONF-ABSTAIN-01",
                     matched=True,
                     inputs={"prior_action": action, "confidence": confidence},
-                    note="Low confidence biases recommendation to request_kyc rather than a strong Clear/SAR.",
+                    note=(
+                        "Low confidence steers the recommendation toward requesting additional KYC "
+                        "rather than a strong Clear or Draft SAR path."
+                    ),
                 )
             )
             action = "request_kyc"
@@ -120,6 +132,7 @@ class ActionableInsightsService:
             precedent_cases=case_data["precedents"],
             draft_notes=synthesis["draft_notes"],
             draft_disclaimer=DRAFT_DISCLAIMER,
+            draft_email=None,
             routing_suggestion=case_data["routing"],
             confidence=confidence,  # type: ignore[arg-type]
             confidence_reason=confidence_reason,
@@ -136,15 +149,24 @@ class ActionableInsightsService:
         insight = self.repository.get_insight(alert_id)
         if insight is None:
             raise KeyError(alert_id)
-        if insight.status in {"approved", "overridden", "actioned"}:
+        if insight.status in {"approved", "overridden", "actioned", "further_info_requested"}:
             raise ValueError("Insight already decided; generate a refresh to create a new recommendation.")
 
-        # State machine: Generated → Reviewed → Approved|Overridden.
-        # "Actioned" is recorded only as audit framing (human-confirmed); no downstream automation.
-        status_after: str = "approved" if request.decision == "approved" else "overridden"
+        context = self.repository.get_alert_context(alert_id) or {}
+        if request.decision == "approved":
+            status_after = "approved"
+        elif request.decision == "request_further_info":
+            status_after = "further_info_requested"
+        else:
+            status_after = "overridden"
+
         updates: dict[str, Any] = {"status": status_after}
         if request.edited_draft_notes is not None:
             updates["draft_notes"] = request.edited_draft_notes
+        email_body = request.edited_draft_email
+        if email_body is None:
+            email_body = self._build_csuite_email(context, insight, request.decision)
+        updates["draft_email"] = email_body
 
         final = insight.model_copy(update=updates)
         self.repository.save_insight(final)
@@ -163,6 +185,94 @@ class ActionableInsightsService:
         )
         self.repository.append_insight_decision(record)
         return final, record
+
+    def update_draft_email(self, alert_id: str, draft_email: str) -> ActionableInsight:
+        insight = self.repository.get_insight(alert_id)
+        if insight is None:
+            raise KeyError(alert_id)
+        updated = insight.model_copy(update={"draft_email": draft_email})
+        self.repository.save_insight(updated)
+        return updated
+
+    def build_csuite_email(self, alert_id: str, decision: str | None = None) -> str:
+        insight = self.repository.get_insight(alert_id)
+        if insight is None:
+            raise KeyError(alert_id)
+        context = self.repository.get_alert_context(alert_id) or {}
+        return self._build_csuite_email(context, insight, decision or "approved")
+
+    @staticmethod
+    def _build_csuite_email(context: dict[str, Any], insight: ActionableInsight, decision: str) -> str:
+        company = context.get("company") or {}
+        company_name = context.get("company_name") or company.get("name") or "valued client"
+        amount = context.get("amount")
+        currency = context.get("currency") or ""
+        action_labels = {
+            "clear": "we are prepared to clear the monitoring alert following our review",
+            "escalate_tier2": "we are escalating the matter to our Tier-2 financial crime unit for deeper review",
+            "request_kyc": "we require additional KYC and supporting information to complete our review",
+            "draft_sar": "we are progressing an internal suspicious activity assessment for further review",
+        }
+        decision_labels = {
+            "approved": (
+                "I have approved the recommended next step and am progressing the case on that basis"
+            ),
+            "overridden": (
+                "I have declined the recommended next step and recorded an alternative disposition "
+                "with documented rationale"
+            ),
+            "request_further_info": (
+                "I am requesting further information from your organisation before we conclude the review"
+            ),
+        }
+        decision_closings = {
+            "approved": (
+                "Please treat this correspondence as confidential and share only with colleagues "
+                "who have a legitimate need to know."
+            ),
+            "overridden": (
+                "Please treat this correspondence as confidential. Further internal coordination may "
+                "follow as we execute the alternative path."
+            ),
+            "request_further_info": (
+                "We would be grateful for your prompt cooperation in providing the requested "
+                "clarification or documentation. Please treat this correspondence as confidential."
+            ),
+        }
+        recommended = action_labels.get(insight.recommended_action, "we are continuing our review with appropriate oversight")
+        decision_line = decision_labels.get(decision, "I am progressing the case with appropriate oversight")
+        closing = decision_closings.get(
+            decision,
+            "Please treat this correspondence as confidential and share only with colleagues who have a legitimate need to know.",
+        )
+        amount_text = f"{currency} {amount:,.0f}" if isinstance(amount, (int, float)) else "the referenced transfer"
+
+        return (
+            f"Subject: Confidential compliance review update — {company_name} ({insight.alert_id})\n\n"
+            f"Dear Members of the Executive Leadership Team,\n\n"
+            f"I am writing as Group Chief Risk Officer of TrustSphere Bank regarding a "
+            f"transaction-monitoring alert linked to {company_name} ({insight.alert_id}). "
+            f"This correspondence is informational and does not itself constitute a regulatory filing, "
+            f"payment block, or final adverse finding.\n\n"
+            f"Case summary\n"
+            f"• Alert: {context.get('alert_type', 'Monitoring alert')}\n"
+            f"• Transaction: {amount_text} from {context.get('origin_country', 'N/A')} "
+            f"to {context.get('destination_country', 'N/A')}\n"
+            f"• Risk priority: {insight.urgency_score:.0f}/100 urgency exposure "
+            f"(distinct from the underlying risk score); recommendation confidence: "
+            f"{confidence_label(insight.confidence)}.\n"
+            f"• Recommended path: {recommended}.\n\n"
+            f"Decision status\n"
+            f"{decision_line.capitalize()}. "
+            f"No automated disposition has been taken.\n\n"
+            f"Rationale\n"
+            f"{insight.rationale}\n\n"
+            f"{closing}\n\n"
+            f"Respectfully,\n"
+            f"Amelia Reyes\n"
+            f"Group Chief Risk Officer\n"
+            f"TrustSphere Bank"
+        )
 
     def _case_evidence(self, alert_id: str, context: dict[str, Any]) -> dict[str, Any]:
         return get_case_evidence(alert_id, context)
@@ -203,7 +313,7 @@ class ActionableInsightsService:
                 rule_id="SAR-01",
                 matched=sar_match,
                 inputs=sar_inputs,
-                note="Draft SAR when sanctions hit, or high tier with elevated entity_risk and prior cases.",
+                note="Draft SAR when sanctions hit, or high tier with elevated entity risk and prior cases.",
             )
         )
         if sar_match:
@@ -230,7 +340,7 @@ class ActionableInsightsService:
                 rule_id="ESC-01",
                 matched=escalate_match,
                 inputs=escalate_inputs,
-                note="Escalate to Tier 2 for high tier, or medium tier with PEP/geo/regulatory/structuring signals.",
+                note="Escalate to Tier 2 for high priority, or medium priority with PEP, geographic, regulatory, or structuring signals.",
             )
         )
         if escalate_match:
@@ -253,7 +363,7 @@ class ActionableInsightsService:
                 rule_id="KYC-01",
                 matched=kyc_match,
                 inputs=kyc_inputs,
-                note="Request additional KYC when evidence is weak, ownership is layered, or medium-tier deviation exists.",
+                note="Request additional KYC when evidence is weak, ownership is layered, or medium-priority deviation exists.",
             )
         )
         if kyc_match:
@@ -278,7 +388,7 @@ class ActionableInsightsService:
                 rule_id="CLR-01",
                 matched=clear_match,
                 inputs=clear_inputs,
-                note="Clear only for low-tier alerts without sanctions/PEP, low amount ratio, and no prior cases.",
+                note="Clear only for low-priority alerts without sanctions or PEP exposure, modest amount deviation, and no prior cases.",
             )
         )
         if clear_match:
@@ -290,7 +400,7 @@ class ActionableInsightsService:
                 rule_id="KYC-DEFAULT",
                 matched=True,
                 inputs={"tier": score.tier},
-                note="No strong Clear/Escalate/SAR match; default to request additional KYC/info.",
+                note="No strong Clear, Escalate, or SAR match; default to request additional KYC information.",
             )
         )
         return "request_kyc", trace
@@ -360,42 +470,45 @@ class ActionableInsightsService:
         items: list[EvidenceItem] = [
             EvidenceItem(
                 label="Risk score total",
-                value=f"{score.total} ({score.tier})",
-                source="RiskAssess scoring engine",
+                value=f"{score.total} ({tier_label(score.tier)} priority)",
+                source="RiskAssess scoring",
             ),
             EvidenceItem(
                 label="Sanctions / PEP",
-                value=f"sanctions={company.get('sanctions_match')}, pep={company.get('pep')}",
-                source="COMPANY screening flags",
+                value=(
+                    f"Sanctions match: {yes_no(company.get('sanctions_match'))}; "
+                    f"PEP association: {yes_no(company.get('pep'))}"
+                ),
+                source="Company screening",
             ),
             EvidenceItem(
-                label="Amount vs baseline",
-                value=f"{float(signals.get('amount_ratio') or context.get('amount_ratio') or 1):.1f}×",
-                source="TRANSACTION_BASELINES",
+                label="Amount versus baseline",
+                value=f"{float(signals.get('amount_ratio') or context.get('amount_ratio') or 1):.1f}× baseline",
+                source="Transaction baselines",
             ),
             EvidenceItem(
                 label="Prior compliance cases",
                 value=str(company.get("prior_cases")),
-                source="COMPLIANCE_CASES",
+                source="Compliance case history",
             ),
             EvidenceItem(
                 label="Counterparty history",
                 value=str(case_data.get("counterparty_history")),
-                source="Mock case-data store",
+                source="Case evidence store",
             ),
             EvidenceItem(
-                label="Transaction metadata",
+                label="Transaction details",
                 value=str(case_data.get("transaction_metadata")),
-                source="Mock case-data store",
+                source="Case evidence store",
             ),
         ]
         for factor in score.factors:
             if factor.score >= factor.max_score * 0.6:
                 items.append(
                     EvidenceItem(
-                        label=f"Elevated factor: {factor.key}",
+                        label=f"Elevated factor: {factor.label or factor_label(factor.key)}",
                         value=f"{factor.score}/{factor.max_score} — {factor.rationale}",
-                        source="RiskAssess factor evidence",
+                        source="Risk factor evidence",
                     )
                 )
         return items
@@ -410,23 +523,26 @@ class ActionableInsightsService:
         evidence: list[EvidenceItem],
         case_data: dict[str, Any],
     ) -> dict[str, Any]:
-        payload = {
-            "locked_recommendation": {
-                "recommended_action": action,
-                "action_label": ACTION_LABELS[action],
-                "urgency_score": urgency_score,
-                "confidence": confidence,
-            },
-            "alert": {
-                "id": context["id"],
-                "type": context["alert_type"],
-                "description": context["description"],
-            },
-            "score": score.model_dump(mode="json"),
-            "evidence": [item.model_dump() for item in evidence],
-            "precedent_cases": [item.model_dump() for item in case_data["precedents"]],
-            "instruction": "Do not change recommended_action, urgency_score, or confidence.",
-        }
+        payload = redact_for_llm(
+            {
+                "locked_recommendation": {
+                    "recommended_action": action,
+                    "action_label": ACTION_LABELS[action],
+                    "urgency_score": urgency_score,
+                    "confidence": confidence,
+                },
+                "alert": {
+                    "id": context["id"],
+                    "type": context["alert_type"],
+                    "description": context["description"],
+                },
+                "company_name": context.get("company_name"),
+                "score": score.model_dump(mode="json"),
+                "evidence": [item.model_dump() for item in evidence],
+                "precedent_cases": [item.model_dump() for item in case_data["precedents"]],
+                "instruction": "Do not change recommended_action, urgency_score, or confidence.",
+            }
+        )
         try:
             generated = ModelSynthesis.model_validate(
                 self.ai_core.chat_json(SYNTHESIS_SYSTEM_PROMPT, payload)
@@ -451,29 +567,33 @@ class ActionableInsightsService:
         confidence: str,
     ) -> dict[str, Any]:
         top = sorted(score.factors, key=lambda item: item.score / item.max_score, reverse=True)[:3]
-        cited = ", ".join(f"{item.key} ({item.score}/{item.max_score})" for item in top)
-        label = ACTION_LABELS[action]
+        cited = ", ".join(
+            f"{item.label or factor_label(item.key)} ({item.score}/{item.max_score})" for item in top
+        )
+        label = action_label(action)
         rationale = (
-            f"Rules selected '{label}' for alert {context['id']} (risk tier {score.tier}, "
-            f"total {score.total}). Primary drivers referenced: {cited}. "
+            f"The structured review recommends “{label}” for alert {context['id']} "
+            f"({tier_label(score.tier)} priority, score {score.total}). "
+            f"Primary drivers: {cited}. "
             f"Urgency/exposure is {urgency_score}/100 (distinct from the risk score). "
-            f"Confidence is {confidence}."
+            f"Confidence is {confidence_label(confidence)}."
         )
         draft_notes = (
-            f"[DRAFT — requires human edit/approval]\n"
+            f"Draft case note — review before submitting.\n"
             f"Alert {context['id']} ({context['alert_type']}) for {context['company_name']}.\n"
-            f"Recommended disposition: {label}. Risk score {score.total} ({score.tier}); "
-            f"urgency/exposure {urgency_score}.\n"
-            f"Key factor references: {cited}.\n"
-            f"Entity flags: sanctions={context['company'].get('sanctions_match')}, "
-            f"PEP={context['company'].get('pep')}, prior_cases={context['company'].get('prior_cases')}.\n"
-            f"This note is a draft only and must be reviewed before any disposition is recorded. "
+            f"Recommended next step: {label}. Risk score {score.total} "
+            f"({tier_label(score.tier)} priority); urgency/exposure {urgency_score}.\n"
+            f"Key factors: {cited}.\n"
+            f"Entity screening: sanctions match {yes_no(context['company'].get('sanctions_match'))}; "
+            f"PEP association {yes_no(context['company'].get('pep'))}; "
+            f"prior compliance cases {context['company'].get('prior_cases')}.\n"
+            f"Prepared for Group Chief Risk Officer review. This note must be reviewed before any disposition is recorded. "
             f"No payment block, SAR filing, or alert closure has been performed."
         )
         return {
             "rationale": rationale,
             "draft_notes": draft_notes,
-            "evidence_labels": [item.key for item in top],
+            "evidence_labels": [item.label or factor_label(item.key) for item in top],
             "provenance": "rules+fallback",
             "model": "deterministic-synthesis-v1",
         }

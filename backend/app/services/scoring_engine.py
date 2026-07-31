@@ -12,6 +12,8 @@ from app.config import Settings
 from app.models.schemas import EvidenceItem, FactorScore, RiskScore
 from app.services.ai_core_client import AICoreClient, AICoreError
 from app.services.confidence_assessor import attach_confidence
+from app.services.presentable import source_label, yes_no
+from app.services.privacy import redact_for_llm
 from app.services.repository import RiskRepository
 
 logger = logging.getLogger(__name__)
@@ -60,7 +62,9 @@ do not treat missing data as evidence of risk. Sanctions or confirmed PEP data
 belongs under entity risk; size/structuring/speed under transaction behaviour;
 FATF/country exposure under geographic risk; deviation from the supplied
 baseline under behavioural deviation; supervisory attention and prior cases
-under regulatory sensitivity. Keep rationales concise and traceable.
+under regulatory sensitivity. Write every rationale and evidence value in plain
+English suitable for an executive reader — no snake_case keys, no key=value dumps,
+and use friendly source names such as “Company risk profiles”.
 """.strip()
 
 
@@ -89,12 +93,9 @@ class ScoringEngine:
             raise KeyError(alert_id)
         fingerprint = self.source_fingerprint(context)
         cached = self.repository.get_score(alert_id)
-        if (
-            cached
-            and cached.source_fingerprint == fingerprint
-            and not refresh
-            and (not use_ai or cached.provenance != "fallback")
-        ):
+        # Always reuse a matching cached score so list, detail, and stats stay consistent.
+        # AI recomputation is reserved for explicit refresh=True.
+        if cached and cached.source_fingerprint == fingerprint and not refresh:
             return cached.model_copy(update={"provenance": "cached"})
 
         if use_ai:
@@ -134,23 +135,26 @@ class ScoringEngine:
 
     @staticmethod
     def _prompt_payload(context: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "alert": {
-                "id": context["id"],
-                "type": context["alert_type"],
-                "description": context["description"],
-                "status": context["status"],
-            },
-            "transaction": {
-                "amount": context["amount"],
-                "currency": context["currency"],
-                "origin_country": context["origin_country"],
-                "destination_country": context["destination_country"],
-                **context["transaction"],
-            },
-            "company": context["company"],
-            "derived_signals": context["signals"],
-        }
+        return redact_for_llm(
+            {
+                "alert": {
+                    "id": context["id"],
+                    "type": context["alert_type"],
+                    "description": context["description"],
+                    "status": context["status"],
+                },
+                "transaction": {
+                    "amount": context["amount"],
+                    "currency": context["currency"],
+                    "origin_country": context["origin_country"],
+                    "destination_country": context["destination_country"],
+                    **context["transaction"],
+                },
+                "company_name": context.get("company_name"),
+                "company": context["company"],
+                "derived_signals": context["signals"],
+            }
+        )
 
     @staticmethod
     def _model_factors(response: ModelScoreResponse) -> list[FactorScore]:
@@ -197,21 +201,79 @@ class ScoringEngine:
         )
 
         rows = [
-            ("entity_risk", entity, f"Entity flags: sanctions={company['sanctions_match']}, PEP={company['pep']}, ownership layers={company['beneficial_owner_layers']}.", [
-                EvidenceItem(label="Risk rating", value=str(company["risk_rating"]), source="COMPANY_RISK_PROFILES")
-            ]),
-            ("transaction_behaviour", behaviour, f"Amount is {signals['amount_ratio']:.1f}× baseline with {signals['rapid_transfers']} rapid related transfers.", [
-                EvidenceItem(label="Transaction amount", value=f"{context['currency']} {context['amount']:,.0f}", source="TRANSACTIONS")
-            ]),
-            ("geographic_risk", geography, f"Destination country risk is {signals['fatf_risk']}; new corridor={signals['new_corridor']}.", [
-                EvidenceItem(label="Destination", value=str(context["destination_country"]), source="COUNTRIES")
-            ]),
-            ("behavioural_deviation", deviation, f"Current amount is {signals['amount_ratio']:.1f}× the entity's normal amount.", [
-                EvidenceItem(label="Baseline average", value=f"{context['currency']} {company['baseline_average_amount']:,.0f}", source="TRANSACTION_BASELINES")
-            ]),
-            ("regulatory_sensitivity", regulatory, f"Supervisory attention={signals['supervisory_attention']}; prior cases={company['prior_cases']}.", [
-                EvidenceItem(label="Prior cases", value=str(company["prior_cases"]), source="COMPLIANCE_CASES")
-            ]),
+            (
+                "entity_risk",
+                entity,
+                (
+                    f"Entity screening shows sanctions match: {yes_no(company['sanctions_match'])}, "
+                    f"PEP association: {yes_no(company['pep'])}, and "
+                    f"{company['beneficial_owner_layers']} ownership layers."
+                ),
+                [
+                    EvidenceItem(
+                        label="Risk rating",
+                        value=str(company["risk_rating"]).title(),
+                        source=source_label("COMPANY_RISK_PROFILES"),
+                    )
+                ],
+            ),
+            (
+                "transaction_behaviour",
+                behaviour,
+                (
+                    f"Amount is {signals['amount_ratio']:.1f}× baseline with "
+                    f"{signals['rapid_transfers']} rapid related transfers."
+                ),
+                [
+                    EvidenceItem(
+                        label="Transaction amount",
+                        value=f"{context['currency']} {context['amount']:,.0f}",
+                        source=source_label("TRANSACTIONS"),
+                    )
+                ],
+            ),
+            (
+                "geographic_risk",
+                geography,
+                (
+                    f"Destination country risk is {str(signals['fatf_risk']).title()}; "
+                    f"new corridor: {yes_no(signals['new_corridor'])}."
+                ),
+                [
+                    EvidenceItem(
+                        label="Destination",
+                        value=str(context["destination_country"]),
+                        source=source_label("COUNTRIES"),
+                    )
+                ],
+            ),
+            (
+                "behavioural_deviation",
+                deviation,
+                f"Current amount is {signals['amount_ratio']:.1f}× the entity's normal amount.",
+                [
+                    EvidenceItem(
+                        label="Baseline average",
+                        value=f"{context['currency']} {company['baseline_average_amount']:,.0f}",
+                        source=source_label("TRANSACTION_BASELINES"),
+                    )
+                ],
+            ),
+            (
+                "regulatory_sensitivity",
+                regulatory,
+                (
+                    f"Supervisory attention: {yes_no(signals['supervisory_attention'])}; "
+                    f"prior compliance cases: {company['prior_cases']}."
+                ),
+                [
+                    EvidenceItem(
+                        label="Prior cases",
+                        value=str(company["prior_cases"]),
+                        source=source_label("COMPLIANCE_CASES"),
+                    )
+                ],
+            ),
         ]
         return [
             FactorScore(

@@ -10,13 +10,17 @@ from app.models.schemas import (
     AlertDetail,
     AlertPage,
     AlertStats,
+    AlertStatusUpdate,
     AlertSummary,
     ActivityPoint,
     BeneficialOwner,
     CompanyDetail,
+    IntegrationMeta,
     RiskScore,
     TransactionDetail,
 )
+from app.services.privacy import privacy_meta
+from app.services.repository import SCORED_QUEUE_CAP
 from app.services.repository import RiskRepository
 from app.services.scoring_engine import ScoringEngine
 
@@ -24,7 +28,18 @@ from app.services.scoring_engine import ScoringEngine
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
-def _summary(context: dict, score: RiskScore) -> AlertSummary:
+def _integration(context: dict, repository: RiskRepository) -> IntegrationMeta:
+    meta = context.get("integration") or {}
+    return IntegrationMeta(
+        source=str(meta.get("source") or repository.mode),  # type: ignore[arg-type]
+        normalised_status=str(meta.get("normalised_status") or context.get("status") or "open"),
+        raw_status=str(meta.get("raw_status") or context.get("raw_status") or "") or None,
+        scored_queue_cap=int(meta.get("scored_queue_cap") or SCORED_QUEUE_CAP),
+        privacy_region=str(meta.get("privacy_region") or privacy_meta()["region"]),
+    )
+
+
+def _summary(context: dict, score: RiskScore, repository: RiskRepository) -> AlertSummary:
     return AlertSummary(
         id=str(context["id"]),
         transaction_id=str(context["transaction_id"]),
@@ -41,6 +56,7 @@ def _summary(context: dict, score: RiskScore) -> AlertSummary:
         destination_country=str(context["destination_country"]),
         created_at=context["created_at"],
         score=score,
+        integration=_integration(context, repository),
     )
 
 
@@ -50,7 +66,7 @@ def _detail(context: dict, score: RiskScore, repository: RiskRepository) -> Aler
     owners = repository.get_beneficial_owners(str(context["company_id"]))
     activity = repository.get_transaction_activity(str(context["company_id"]), score.total)
     return AlertDetail(
-        **_summary(context, score).model_dump(),
+        **_summary(context, score, repository).model_dump(),
         description=str(context["description"]),
         transaction=TransactionDetail(
             id=str(context["transaction_id"]),
@@ -117,7 +133,7 @@ def list_alerts(
     scoring: ScoringEngine = Depends(get_scoring_engine),
 ) -> AlertPage:
     items = [
-        _summary(row, scoring.score_alert(str(row["id"]), use_ai=False))
+        _summary(row, scoring.score_alert(str(row["id"]), use_ai=False), repository)
         for row in repository.all_alert_contexts()
     ]
     if tier:
@@ -131,13 +147,24 @@ def list_alerts(
             for item in items
             if needle in " ".join((item.id, item.company_name, item.alert_type, item.transaction_id)).lower()
         ]
-    key_functions = {
-        "score": lambda item: item.score.total,
-        "created_at": lambda item: item.created_at,
-        "amount": lambda item: item.amount,
-        "company_name": lambda item: item.company_name.lower(),
-    }
-    items.sort(key=key_functions[sort_by], reverse=sort_order == "desc")
+    reverse = sort_order == "desc"
+    if sort_by == "score":
+        # SLA-breached high-tier cases surface first within the scored work queue.
+        items.sort(
+            key=lambda item: (
+                1 if item.sla_breached else 0,
+                2 if item.score.tier == "high" else 1 if item.score.tier == "medium" else 0,
+                item.score.total,
+            ),
+            reverse=reverse,
+        )
+    else:
+        key_functions = {
+            "created_at": lambda item: item.created_at,
+            "amount": lambda item: item.amount,
+            "company_name": lambda item: item.company_name.lower(),
+        }
+        items.sort(key=key_functions[sort_by], reverse=reverse)
     total = len(items)
     start = (page - 1) * page_size
     return AlertPage(
@@ -178,7 +205,23 @@ def get_alert(
     context = repository.get_alert_context(alert_id)
     if context is None:
         raise HTTPException(status_code=404, detail="Alert not found")
-    return _detail(context, scoring.score_alert(alert_id), repository)
+    return _detail(context, scoring.score_alert(alert_id, use_ai=False), repository)
+
+
+@router.patch("/{alert_id}/status", response_model=AlertDetail)
+def update_alert_status(
+    alert_id: str,
+    payload: AlertStatusUpdate,
+    repository: RiskRepository = Depends(get_repository),
+    scoring: ScoringEngine = Depends(get_scoring_engine),
+) -> AlertDetail:
+    try:
+        context = repository.update_alert_status(alert_id, payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if context is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return _detail(context, scoring.score_alert(alert_id, use_ai=False), repository)
 
 
 @router.get("/{alert_id}/score", response_model=RiskScore)
@@ -189,7 +232,7 @@ def get_score(
 ) -> RiskScore:
     if repository.get_alert_context(alert_id) is None:
         raise HTTPException(status_code=404, detail="Alert not found")
-    return scoring.score_alert(alert_id)
+    return scoring.score_alert(alert_id, use_ai=False)
 
 
 @router.post("/{alert_id}/score", response_model=RiskScore)
@@ -200,4 +243,4 @@ def refresh_score(
 ) -> RiskScore:
     if repository.get_alert_context(alert_id) is None:
         raise HTTPException(status_code=404, detail="Alert not found")
-    return scoring.score_alert(alert_id, refresh=True)
+    return scoring.score_alert(alert_id, refresh=True, use_ai=True)

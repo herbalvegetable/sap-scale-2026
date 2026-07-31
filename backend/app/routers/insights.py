@@ -1,7 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.dependencies import get_insights_service, get_repository
-from app.models.schemas import ActionableInsight, InsightDecisionRequest, InsightDecisionResponse
+from app.models.schemas import (
+    ActionableInsight,
+    InsightDecisionRequest,
+    InsightDecisionResponse,
+    InsightEmailDraftRequest,
+)
 from app.services.actionable_insights import ActionableInsightsService
 from app.services.repository import RiskRepository
 
@@ -50,3 +55,19 @@ def decide_insights(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return InsightDecisionResponse(insight=insight, decision=record)
+
+
+@router.post("/{alert_id}/insights/email", response_model=ActionableInsight)
+def draft_csuite_email(
+    alert_id: str,
+    body: InsightEmailDraftRequest = InsightEmailDraftRequest(),
+    repository: RiskRepository = Depends(get_repository),
+    insights: ActionableInsightsService = Depends(get_insights_service),
+) -> ActionableInsight:
+    if repository.get_alert_context(alert_id) is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    try:
+        email = insights.build_csuite_email(alert_id, decision=body.decision)
+        return insights.update_draft_email(alert_id, email)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No actionable insight generated yet") from None

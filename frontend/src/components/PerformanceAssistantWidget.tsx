@@ -2,44 +2,36 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { MessageCircle } from "lucide-react";
 import { api } from "../lib/api";
-import type { ChatMessage, ChatSuggestion } from "../lib/types";
+import type { ChatMessage, ChatSuggestion, RangeMonths } from "../lib/types";
 import { AssistantPanel } from "./AssistantPanel";
 
 interface Props {
-  alertId: string;
-  hasInsight: boolean;
-  onInsertDraft: (snippet: string) => void;
-  onInsertEmail: (email: string) => void;
+  rangeMonths: RangeMonths;
 }
 
-export function CaseAssistantWidget({ alertId, hasInsight, onInsertDraft, onInsertEmail }: Props) {
+export function PerformanceAssistantWidget({ rangeMonths }: Props) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [suggestions, setSuggestions] = useState<ChatSuggestion[]>([]);
   const [greeting, setGreeting] = useState("");
   const [followUp, setFollowUp] = useState("");
-  const [pendingDraft, setPendingDraft] = useState<string | null>(null);
-  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
   const [usedSuggestionIds, setUsedSuggestionIds] = useState<string[]>([]);
   const [bannerVisible, setBannerVisible] = useState(true);
 
   const thread = useQuery({
-    queryKey: ["chat", alertId],
-    queryFn: () => api.chatHistory(alertId),
+    queryKey: ["performance-chat", rangeMonths],
+    queryFn: () => api.performanceChatHistory(rangeMonths),
     enabled: open,
   });
 
   useEffect(() => {
-    setOpen(false);
     setMessages([]);
     setSuggestions([]);
     setGreeting("");
     setFollowUp("");
-    setPendingDraft(null);
-    setPendingEmail(null);
     setUsedSuggestionIds([]);
     setBannerVisible(true);
-  }, [alertId]);
+  }, [rangeMonths]);
 
   useEffect(() => {
     if (!thread.data) return;
@@ -51,7 +43,7 @@ export function CaseAssistantWidget({ alertId, hasInsight, onInsertDraft, onInse
   }, [thread.data]);
 
   const send = useMutation({
-    mutationFn: (message: string) => api.chat(alertId, message),
+    mutationFn: (message: string) => api.performanceChat(message, rangeMonths),
     onSuccess: (data, message) => {
       const now = new Date().toISOString();
       setMessages((current) => [
@@ -65,11 +57,6 @@ export function CaseAssistantWidget({ alertId, hasInsight, onInsertDraft, onInse
           created_at: now,
         },
       ]);
-      setPendingDraft(data.suggested_draft_snippet ?? null);
-      setPendingEmail(data.suggested_email_draft ?? null);
-      if (data.suggested_email_draft) {
-        onInsertEmail(data.suggested_email_draft);
-      }
     },
   });
 
@@ -80,31 +67,22 @@ export function CaseAssistantWidget({ alertId, hasInsight, onInsertDraft, onInse
   };
 
   return (
-    <div className="case-assistant">
+    <div className="case-assistant performance-assistant">
       {open && (
         <AssistantPanel
-          eyebrow="Transaction-scoped"
-          title="Case assistant"
-          disclaimer="Decision support only — use Approve/Override on Actionable Insights to act. I never clear, escalate, or file."
+          eyebrow={`${rangeMonths}-month scoped`}
+          title="Performance assistant"
+          disclaimer="Decision support only — answers are grounded on the selected dashboard range. I never clear, escalate, forecast, or change operational dispositions."
           greeting={greeting}
           messages={messages}
           suggestions={suggestions}
           usedSuggestionIds={usedSuggestionIds}
           followUp={followUp}
-          placeholder="Ask anything about this case…"
-          loadingLabel="Grounding on this case…"
+          placeholder="Ask about backlog, SLA, closure rate…"
+          loadingLabel="Grounding on operations metrics…"
           bannerVisible={bannerVisible}
           isPending={send.isPending}
           errorMessage={send.isError ? send.error.message : null}
-          draftActions={{
-            pendingDraft,
-            pendingEmail,
-            hasInsight,
-            onInsertDraft,
-            onInsertEmail,
-            onClearDraft: () => setPendingDraft(null),
-            onClearEmail: () => setPendingEmail(null),
-          }}
           onClose={() => setOpen(false)}
           onDismissBanner={() => setBannerVisible(false)}
           onFollowUpChange={setFollowUp}
@@ -120,10 +98,10 @@ export function CaseAssistantWidget({ alertId, hasInsight, onInsertDraft, onInse
         className="case-assistant__fab"
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
-        aria-label="Open case assistant"
+        aria-label="Open performance assistant"
       >
         <MessageCircle size={20} />
-        <span>Case assistant</span>
+        <span>Performance assistant</span>
       </button>
     </div>
   );

@@ -45,3 +45,16 @@ def test_cached_score_has_cached_provenance() -> None:
 
     assert first.total == second.total
     assert second.provenance == "cached"
+
+
+def test_detail_path_does_not_change_list_score() -> None:
+    """List uses fallback; detail must reuse that cache instead of silently AI-upgrading."""
+    repository, engine = build_engine()
+    alert_id = repository.all_alert_contexts()[0]["id"]
+
+    list_score = engine.score_alert(alert_id, use_ai=False)
+    detail_score = engine.score_alert(alert_id, use_ai=True)
+
+    assert detail_score.total == list_score.total
+    assert detail_score.tier == list_score.tier
+    assert detail_score.provenance == "cached"

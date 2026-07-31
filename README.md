@@ -10,7 +10,7 @@
 
 ## 1. Executive summary
 
-We process 118,400 high-value cross-border transactions per year, but our financial-crime controls still depend on static rules, manual review, and fragmented regional data. Our transaction-monitoring process produces 12,000 alerts annually, 90–95% of which are false positives. Escalated reviews take one to three days, high-value payments are delayed by three business days, and our financial-crime operating costs have risen 25% in two years. We are also under heightened regulatory scrutiny and a hiring freeze. We cannot add people indefinitely or compromise explainability, regulatory standing, or human accountability.
+We process 118,400 high-value cross-border transactions per year, but our financial-crime controls still depend on static rules, manual review, and fragmented regional data. Our transaction-monitoring process produces 12,000 alerts annually. Escalated reviews take one to three days, high-value payments are delayed by three business days, and our financial-crime operating costs have risen 25% in two years. We are also under heightened regulatory scrutiny and a hiring freeze. We cannot add people indefinitely or compromise explainability, regulatory standing, or human accountability.
 
 RiskAssess is the human-in-the-loop triage and investigation-support capability we are adopting to:
 
@@ -22,7 +22,7 @@ RiskAssess is the human-in-the-loop triage and investigation-support capability 
 - provides deterministic rules and fallbacks when AI or HANA is unavailable;
 - redacts personal data before LLM calls and applies prompt-injection controls;
 - preserves human approval, override, and accountability for every material decision; and
-- exposes operational analytics for backlog, review time, closure, false-positive outcomes, SLA adherence, and unresolved exposure.
+- exposes operational analytics for backlog, review time, closure, SLA adherence, and unresolved exposure.
 
 As Group CRO, I require RiskAssess to remain a **decision-support and workflow-prioritisation layer**, not an autonomous decision maker. It must not autonomously block payments, file suspicious activity reports (SARs), close accounts, or determine criminality. Accountability for customer-impacting decisions remains with our authorised people.
 
@@ -52,7 +52,7 @@ Our Board requires demonstrable improvement in financial-crime effectiveness and
 Our current financial-crime operating model is not sustainable or scalable:
 
 1. **Static detection does not match evolving crime patterns.** Thresholds and fixed rules are weak at identifying multi-layered ownership, rapid movement of funds, unusual corridors, behavioural deviation, and combinations of risk signals.
-2. **Most alerts do not represent productive investigative work.** A 90–95% false-positive rate means investigators spend most of their capacity gathering context for cases that are ultimately cleared.
+2. **Alert volume consumes scarce investigative capacity.** Investigators must gather and reconcile context for 12,000 alerts each year while ensuring that the cases with the greatest regulatory exposure are reviewed first.
 3. **Data is fragmented by region and function.** Investigators must reconstruct the same case across disconnected systems, creating delays and inconsistent risk visibility.
 4. **The queue is not prioritised by regulatory exposure.** A simple first-in-first-out or static-severity queue does not adequately surface aged, high-risk, sanctions-related, or regulatorily sensitive cases.
 5. **Manual work increases cost and customer friction.** Reviews take one to three days and high-value payments are delayed by three business days, contributing to client dissatisfaction and exits.
@@ -65,7 +65,6 @@ Our current financial-crime operating model is not sustainable or scalable:
 | Pain point | Case baseline | Business consequence |
 |---|---:|---|
 | Manual review time per escalated case | 1–3 days | Slow resolution and growing aged-alert backlog |
-| AML alert false-positive rate | 90–95% | Investigator capacity consumed by low-value review |
 | Annual alert volume | 12,000 | Approximately 1,000 alerts per month |
 | Annual high-value transactions | 118,400 | Large and growing monitoring surface |
 | High-value payment approval delay | 3 business days | Customer friction, delayed settlement, possible churn |
@@ -123,7 +122,7 @@ This boundary is important to our governance position: RiskAssess improves **whi
 | Fragmented data | Canonical repository layer joins HANA alert, transaction, company, ownership, country, baseline, and case data | Less manual context assembly |
 | Unprioritised backlog | 0–100 score, high/medium/low tiers, SLA-breach-first sorting, urgency score, and unresolved-exposure KPIs | Highest regulatory exposure reviewed first |
 | Static, opaque rules | Five-factor score with factor-level rationale, evidence, confidence, prompt/model metadata, and deterministic total | Explainable and reproducible triage |
-| Very high false-positive workload | Low-risk cases are surfaced with supporting evidence while high-risk cases receive priority | Faster safe handling of likely false positives without weakening scrutiny |
+| High alert workload | Cases are ranked by risk, regulatory exposure, confidence, and SLA pressure | Scarce investigator capacity focused on the most consequential unresolved cases |
 | Slow investigation | Business Folder, policy retrieval, precedents, case assistant, charts, draft notes, and actionable recommendations | Shorter time to understand and document a case |
 | Rising cost under hiring freeze | Automation of retrieval, synthesis, ranking, and drafting | Lower effort and cost per case |
 | Regulatory scrutiny | Human approval/override, audit events, no autonomous adverse action, and visible model provenance | Defensible governance |
@@ -223,7 +222,7 @@ GPT-4o may propose factor scores and explanations, but Python validates every fa
 - Alerts raised and closed by month.
 - Current backlog, open cases, and investigating cases.
 - Median review time when audit events support the calculation.
-- Closure rate, SLA adherence, false-positive outcome rate, and review-timeout rate.
+- Closure rate, SLA adherence, and review-timeout rate.
 - High-priority unresolved count and associated monetary exposure.
 - Total unresolved exposure and latest-month backlog change.
 - Performance assistant grounded in the selected dashboard period.
@@ -752,8 +751,6 @@ The following are direct calculations from case facts, not observed RiskAssess r
 | Derived metric | Calculation | Result |
 |---|---:|---:|
 | Alerts as a share of annual high-value transactions | 12,000 / 118,400 | 10.1% |
-| False-positive alerts per year | 12,000 × 90–95% | 10,800–11,400 |
-| Non-false-positive alerts per year | 12,000 × 5–10% | 600–1,200 |
 | Average alerts per month | 12,000 / 12 | 1,000 |
 | Average alerts per calendar day | 12,000 / 365 | 32.9 |
 | Theoretical manual review-case-days | 12,000 × 1–3 days | 12,000–36,000 case-days/year |
@@ -764,7 +761,7 @@ The following are direct calculations from case facts, not observed RiskAssess r
 
 \*The 210 staff cover broader financial-crime operations, so this ratio is directional and should not be used as a staffing benchmark without role and effort data.
 
-The core economic opportunity is clear: **nine or more of every ten alerts are ultimately false positives**, yet each enters a process that can take one to three days.
+The core economic opportunity is clear: **12,000 alerts enter a process that can take one to three days**, while our investigators need to identify and resolve the cases carrying the greatest regulatory exposure.
 
 ### 14.2 Outcomes I expect from a controlled pilot
 
@@ -809,17 +806,6 @@ If alert volume grows proportionally with the observed 18.2% two-year transactio
 ```
 
 In other words, the target efficiency could absorb that volume growth and still leave variable case-processing cost approximately **17.3% below the original baseline**, assuming the same alert-to-transaction ratio and no change in case complexity.
-
-### 14.4 Why false-positive-rate reduction is not claimed as an achieved result
-
-RiskAssess does not replace our source monitoring rules in its current scope. It can:
-
-- reduce time spent collecting evidence for likely false positives;
-- improve prioritisation of the smaller set of genuinely high-risk cases;
-- reveal patterns that can inform later rule tuning; and
-- measure false-positive outcomes over time.
-
-We will claim a lower alert false-positive rate only after upstream rule or model changes are tested with labelled outcomes. Our immediate KPI is **effort per false-positive case and time to safe disposition**, not an unsupported claim that the application removes false alerts.
 
 ---
 

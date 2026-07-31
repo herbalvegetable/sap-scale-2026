@@ -2,16 +2,17 @@
 
 > **Document status:** Current prototype documentation  
 > **Application:** RiskAssess for TrustSphere Bank  
-> **Purpose:** Explain the business problem, current product capabilities, architecture, SAP integration, governance controls, expected impact, and production-readiness gaps.  
+> **Executive owner and narrative perspective:** Group Chief Risk Officer, TrustSphere Bank  
+> **Purpose:** Set out our financial-crime problem, the capabilities we are adopting, the architecture and SAP integrations that support them, the controls I require as Group CRO, the outcomes we expect, and the gaps we must close before production.  
 > **Evidence convention:** “Case fact” means a value supplied in the SCALE 2026 case. “Implemented” means it exists in the current codebase. “Target” or “illustrative” means it must be validated in a controlled pilot and is not a guaranteed outcome.
 
 ---
 
 ## 1. Executive summary
 
-TrustSphere Bank processes 118,400 high-value cross-border transactions per year but manages financial-crime risk through static rules, manual review, and fragmented regional data. Its transaction-monitoring process produces 12,000 alerts annually, 90–95% of which are false positives. Escalated reviews take one to three days, high-value payments are delayed by three business days, and financial-crime operating costs have risen 25% in two years. At the same time, the bank is under heightened regulatory scrutiny, cannot solve the problem through additional hiring, and must preserve explainability and human accountability.
+We process 118,400 high-value cross-border transactions per year, but our financial-crime controls still depend on static rules, manual review, and fragmented regional data. Our transaction-monitoring process produces 12,000 alerts annually, 90–95% of which are false positives. Escalated reviews take one to three days, high-value payments are delayed by three business days, and our financial-crime operating costs have risen 25% in two years. We are also under heightened regulatory scrutiny and a hiring freeze. We cannot add people indefinitely or compromise explainability, regulatory standing, or human accountability.
 
-RiskAssess is a human-in-the-loop financial-crime triage and investigation-support application. It:
+RiskAssess is the human-in-the-loop triage and investigation-support capability we are adopting to:
 
 - unifies alert, transaction, company, country, beneficial-owner, baseline, and compliance-case context from SAP HANA Cloud;
 - assigns every alert a transparent 0–100 priority score across five bounded risk factors;
@@ -23,15 +24,15 @@ RiskAssess is a human-in-the-loop financial-crime triage and investigation-suppo
 - preserves human approval, override, and accountability for every material decision; and
 - exposes operational analytics for backlog, review time, closure, false-positive outcomes, SLA adherence, and unresolved exposure.
 
-RiskAssess is deliberately a **decision-support and workflow-prioritisation layer**, not an autonomous decision maker. It does not autonomously block payments, file suspicious activity reports (SARs), close accounts, or determine criminality.
+As Group CRO, I require RiskAssess to remain a **decision-support and workflow-prioritisation layer**, not an autonomous decision maker. It must not autonomously block payments, file suspicious activity reports (SARs), close accounts, or determine criminality. Accountability for customer-impacting decisions remains with our authorised people.
 
 ---
 
 ## 2. Business context
 
-### 2.1 Client profile
+### 2.1 Our institution
 
-TrustSphere Bank is a multinational financial institution serving approximately 2,400 corporate and institutional relationships across North America, Europe, and Asia. Its key offerings are high-value cross-border payments, trade finance, and financial-risk management.
+TrustSphere Bank is our multinational financial institution, serving approximately 2,400 corporate and institutional relationships across North America, Europe, and Asia. We provide high-value cross-border payments, trade finance, and financial-risk management.
 
 | Case fact | Value |
 |---|---:|
@@ -44,11 +45,11 @@ TrustSphere Bank is a multinational financial institution serving approximately 
 | Operating footprint | North America, Europe, and Asia |
 | Compliance Operations Centre | Singapore |
 
-The Board requires demonstrable improvement in financial-crime effectiveness and efficiency within 12–18 months without compromising regulatory standing. An existing remediation programme has a Q3 2027 deadline and USD 3.2 million of committed spend.
+Our Board requires demonstrable improvement in financial-crime effectiveness and efficiency within 12–18 months without compromising our regulatory standing. Our existing remediation programme has a Q3 2027 deadline and USD 3.2 million of committed spend.
 
-### 2.2 Business problem presented
+### 2.2 The problem we must solve
 
-The bank's financial-crime operating model is not sustainable or scalable:
+Our current financial-crime operating model is not sustainable or scalable:
 
 1. **Static detection does not match evolving crime patterns.** Thresholds and fixed rules are weak at identifying multi-layered ownership, rapid movement of funds, unusual corridors, behavioural deviation, and combinations of risk signals.
 2. **Most alerts do not represent productive investigative work.** A 90–95% false-positive rate means investigators spend most of their capacity gathering context for cases that are ultimately cleared.
@@ -56,10 +57,10 @@ The bank's financial-crime operating model is not sustainable or scalable:
 4. **The queue is not prioritised by regulatory exposure.** A simple first-in-first-out or static-severity queue does not adequately surface aged, high-risk, sanctions-related, or regulatorily sensitive cases.
 5. **Manual work increases cost and customer friction.** Reviews take one to three days and high-value payments are delayed by three business days, contributing to client dissatisfaction and exits.
 6. **Regulation constrains the solution.** AI must be explainable and formally validated where it influences customer outcomes. Human accountability for SAR and payment-blocking decisions is mandatory.
-7. **The bank cannot hire its way out.** A hiring freeze and attrition make additional headcount an unsustainable answer.
+7. **We cannot hire our way out.** A hiring freeze and attrition make additional headcount an unsustainable answer.
 8. **Legacy infrastructure limits real-time assumptions.** The European core platform is more than 15 years old, so a viable solution must tolerate delayed, incomplete, and differently shaped data.
 
-### 2.3 Current pain points and quantified baseline
+### 2.3 Our current pain points and quantified baseline
 
 | Pain point | Case baseline | Business consequence |
 |---|---:|---|
@@ -74,26 +75,26 @@ The bank's financial-crime operating model is not sustainable or scalable:
 | Model Risk Management capacity | 3 FTE | Limited ability to validate multiple complex models |
 | Target cost-per-case improvement | 30% reduction in 18 months | COO-sponsored outcome |
 
-### 2.4 Stakeholder needs
+### 2.4 My risk mandate and our stakeholder needs
 
-- **Chief Risk Officer:** explainable prioritisation, reproducible evidence, no loss of human accountability, and realistic allowance for model validation.
-- **Chief Operating Officer:** 30% lower cost per case, reduced backlog, faster payment decisions, and no dependency on additional headcount.
-- **Chief Technology Officer:** an architecture that works with legacy and fragmented systems and can scale beyond a pilot without becoming a permanent exception.
-- **Investigators:** one place to view the alert, transaction, entity, ownership, behavioural baseline, policy, precedents, and recommended checks.
-- **Model validators:** bounded outputs, versioned prompts, source fingerprints, deterministic aggregation, confidence indicators, and audit records.
-- **Regulators and auditors:** traceable evidence, regional data controls, human decisions, clear limitations, and no autonomous adverse action.
-- **Corporate clients:** fewer unnecessary delays and clearer requests when additional information is genuinely required.
+- **My mandate as Group CRO:** require explainable prioritisation, reproducible evidence, preserved human accountability, and realistic allowance for model validation. I remain accountable for ensuring that RiskAssess strengthens—not weakens—our control environment.
+- **Our Chief Operating Officer:** needs 30% lower cost per case, reduced backlog, faster payment decisions, and no dependency on additional headcount.
+- **Our Chief Technology Officer:** needs an architecture that works with legacy and fragmented systems and can scale beyond a pilot without becoming a permanent exception.
+- **Our investigators:** need one place to view the alert, transaction, entity, ownership, behavioural baseline, policy, precedents, and recommended checks.
+- **Our model validators:** need bounded outputs, versioned prompts, source fingerprints, deterministic aggregation, confidence indicators, and audit records.
+- **Our regulators and auditors:** require traceable evidence, regional data controls, human decisions, clear limitations, and no autonomous adverse action.
+- **Our corporate clients:** should experience fewer unnecessary delays and receive clearer requests when additional information is genuinely required.
 
 ---
 
 ## 3. Solution scope and prioritisation
 
-### 3.1 Problem selected
+### 3.1 What we are solving first
 
-RiskAssess addresses **alert triage, investigation-context assembly, explainability, and operational prioritisation** first. This is the highest-feasibility intervention because it:
+We are using RiskAssess to address **alert triage, investigation-context assembly, explainability, and operational prioritisation** first. I have prioritised this intervention because it:
 
 - directly targets manual effort and aged-alert exposure;
-- can sit above existing monitoring rules without replacing the bank's source systems;
+- can sit above our existing monitoring rules without replacing our source systems;
 - creates value even when data arrives in batches rather than real time;
 - preserves the lighter governance path for rule-based workflow improvements;
 - can be piloted regionally inside the 12–18 month horizon; and
@@ -111,13 +112,13 @@ RiskAssess addresses **alert triage, investigation-context assembly, explainabil
 - a clean, real-time replacement for every regional source platform; and
 - unrestricted generative-AI access to raw customer personal data.
 
-This boundary is important: RiskAssess improves **which case is reviewed next and how quickly an investigator understands it**. It does not claim that the prototype itself eliminates false alerts at source.
+This boundary is important to our governance position: RiskAssess improves **which case we review next and how quickly our investigators understand it**. We do not claim that the prototype itself eliminates false alerts at source.
 
 ---
 
-## 4. Pain points addressed by RiskAssess
+## 4. How RiskAssess addresses our pain points
 
-| Client pain point | RiskAssess response | Intended outcome |
+| Our pain point | RiskAssess response | Intended outcome |
 |---|---|---|
 | Fragmented data | Canonical repository layer joins HANA alert, transaction, company, ownership, country, baseline, and case data | Less manual context assembly |
 | Unprioritised backlog | 0–100 score, high/medium/low tiers, SLA-breach-first sorting, urgency score, and unresolved-exposure KPIs | Highest regulatory exposure reviewed first |
@@ -255,13 +256,13 @@ GPT-4o may propose factor scores and explanations, but Python validates every fa
 
 ### 6.2 Deployment context
 
-The current repository supports:
+Our current repository supports:
 
 1. local frontend and backend development;
 2. a two-container Docker Compose deployment; and
 3. connection to remote SAP HANA Cloud and SAP AI Core services.
 
-The case identifies SAP BTP in Singapore as an approved regional environment. The code and privacy metadata are designed for that target, but the repository does **not** by itself prove that the current local Docker deployment is running on SAP BTP. Production deployment, identity, network controls, secret management, and residency evidence remain implementation work.
+We have approved SAP BTP in Singapore as a regional environment for this use case. The code and privacy metadata are designed for that target, but the repository does **not** by itself prove that the current local Docker deployment is running on SAP BTP. Before I approve production use, we must complete deployment, identity, network, secret-management, and residency controls and retain evidence that they operate as designed.
 
 ### 6.3 Full system and application-flow graph
 
@@ -482,7 +483,7 @@ AI Core is an augmentation layer. Invalid output, timeouts, missing credentials,
 
 ### 8.3 SAP BTP
 
-SAP BTP is the intended approved hosting and integration environment in the Singapore region. It supports the case's residency requirement and provides the logical production home for the API, application, identity, secrets, networking, HANA, and AI Core connectivity.
+SAP BTP is our intended approved hosting and integration environment in the Singapore region. It supports our residency requirement and provides the logical production home for the API, application, identity, secrets, networking, HANA, and AI Core connectivity.
 
 **Current-state caveat:** the repository contains local/Docker deployment assets; it does not contain complete BTP deployment descriptors or proof of a deployed BTP runtime.
 
@@ -493,7 +494,7 @@ SAP BTP is the intended approved hosting and integration environment in the Sing
 - **SAP Analytics Cloud:** charts are rendered in React/Recharts, not SAP Analytics Cloud.
 - **SAP Object Store:** credentials may exist separately, but no current application code uses an object-store client or API.
 
-This distinction prevents overstating the SAP footprint during judging or production review.
+We retain this distinction so that we do not overstate our SAP footprint during executive, regulatory, or production review.
 
 ---
 
@@ -588,7 +589,7 @@ Production requires durable, transactional persistence in approved regional infr
 
 ### 10.1 Human accountability
 
-RiskAssess enforces the case requirement that humans remain accountable:
+RiskAssess enforces my requirement that our people remain accountable:
 
 - no autonomous payment or account block;
 - no autonomous SAR filing;
@@ -630,7 +631,7 @@ The architecture minimises the model's authority:
 - invalid AI output falls back safely; and
 - fully autonomous adverse action is prohibited.
 
-The GPT-4o scoring path still influences prioritisation and therefore requires formal Model Risk Management validation before production. A sensible implementation sequence is to launch deterministic/rule-based workflow prioritisation first, then enable validated AI-assisted factors within the 4–6 month validation lead time.
+The GPT-4o scoring path still influences prioritisation and therefore requires formal Model Risk Management validation before production. I will not approve that path for production until validation is complete. We will launch deterministic, rule-based workflow prioritisation first, then enable validated AI-assisted factors within the 4–6 month validation lead time.
 
 ### 10.4 Auditability
 
@@ -665,7 +666,7 @@ Before payloads are sent to the LLM, the application deep-copies and redacts the
 
 ### 11.2 Residency posture
 
-The target region is identified as **AP-Southeast / Singapore BTP**, which the case states is approved for customer data. HANA connections use encryption and certificate validation by default.
+Our target region is **AP-Southeast / Singapore BTP**, an approved environment for our customer data. HANA connections use encryption and certificate validation by default.
 
 ### 11.3 Privacy limitations and production controls needed
 
@@ -765,7 +766,7 @@ The following are direct calculations from case facts, not observed RiskAssess r
 
 The core economic opportunity is clear: **nine or more of every ten alerts are ultimately false positives**, yet each enters a process that can take one to three days.
 
-### 14.2 Target outcomes for a controlled pilot
+### 14.2 Outcomes I expect from a controlled pilot
 
 | KPI | Case baseline | RiskAssess target | Measurement method |
 |---|---:|---:|---|
@@ -780,11 +781,11 @@ The core economic opportunity is clear: **nine or more of every ten alerts are u
 | Unsupported autonomous actions | Prohibited | 0 | Audit and security monitoring |
 | LLM prompt PII exposure | Unmeasured | 100% of LLM calls pass redaction tests | Prompt-boundary privacy test and sampled audit |
 
-Targets must be validated against a holdout/control group. The prototype's synthetic demo trends must never be presented as achieved bank performance.
+I require these targets to be validated against a holdout or control group. We must never present the prototype's synthetic demo trends as achieved bank performance.
 
 ### 14.3 Cost and capacity scenarios
 
-Because the case does not provide the current dollar cost per case, benefits should be presented as formulas or indexed scenarios:
+Because our current dollar cost per case has not been provided, we will present benefits as formulas or indexed scenarios until Finance supplies an approved baseline:
 
 ```text
 Annual case-processing cost = Annual cases × Fully loaded cost per case
@@ -799,7 +800,7 @@ At 12,000 cases:
 | USD 500 | USD 6.00M | USD 1.80M | USD 4.20M |
 | USD 1,000 | USD 12.00M | USD 3.60M | USD 8.40M |
 
-These scenarios are illustrative, not case facts. Finance must replace the assumed unit cost with payroll, contractor, technology, quality-assurance, and overhead data.
+These scenarios are illustrative, not our reported results. Our Finance team must replace the assumed unit cost with payroll, contractor, technology, quality-assurance, and overhead data.
 
 If alert volume grows proportionally with the observed 18.2% two-year transaction growth while cost per case falls 30%, the indexed variable cost becomes:
 
@@ -811,18 +812,18 @@ In other words, the target efficiency could absorb that volume growth and still 
 
 ### 14.4 Why false-positive-rate reduction is not claimed as an achieved result
 
-RiskAssess does not replace the source monitoring rules in its current scope. It can:
+RiskAssess does not replace our source monitoring rules in its current scope. It can:
 
 - reduce time spent collecting evidence for likely false positives;
 - improve prioritisation of the smaller set of genuinely high-risk cases;
 - reveal patterns that can inform later rule tuning; and
 - measure false-positive outcomes over time.
 
-A lower alert false-positive rate should only be claimed after upstream rule/model changes are tested with labelled outcomes. The immediate KPI is **effort per false-positive case and time to safe disposition**, not an unsupported claim that the application removes false alerts.
+We will claim a lower alert false-positive rate only after upstream rule or model changes are tested with labelled outcomes. Our immediate KPI is **effort per false-positive case and time to safe disposition**, not an unsupported claim that the application removes false alerts.
 
 ---
 
-## 15. Feasibility and recommended rollout
+## 15. Our implementation and assurance roadmap
 
 ### Phase 0 — Governance and baseline (0–2 months)
 
@@ -855,13 +856,13 @@ A lower alert false-positive rate should only be claimed after upstream rule/mod
 - Integrate enterprise IAM, case management, notification, and approved communication systems.
 - Track the 30% cost-per-case target and customer-delay outcomes.
 
-This sequence uses the lighter-governance workflow improvements early while respecting the stated 4–6 month model-validation backlog.
+This sequence allows us to realise lower-risk workflow improvements early while respecting our 4–6 month model-validation backlog. I will use the phase gates to confirm that regulatory, model-risk, privacy, and operational evidence is sufficient before expanding scope.
 
 ---
 
 ## 16. Production-readiness gaps and risks
 
-The prototype demonstrates the intended controls but should not be represented as production-ready.
+The prototype demonstrates our intended control direction, but I do not consider it production-ready.
 
 | Gap | Risk | Required production treatment |
 |---|---|---|
@@ -902,22 +903,22 @@ At the time this document was generated:
 - frontend TypeScript/Vite production build: **passed**; and
 - frontend build emitted a non-blocking warning that the main JavaScript bundle exceeds 500 kB after minification.
 
-Production acceptance should additionally include integration, load, failover, penetration, accessibility, model-validation, prompt-adversarial, privacy, and disaster-recovery testing.
+Before production approval, I require integration, load, failover, penetration, accessibility, model-validation, prompt-adversarial, privacy, and disaster-recovery testing.
 
 ---
 
-## 18. Key assumptions
+## 18. Assumptions we must validate
 
-1. The 12,000 annual alerts and 118,400 annual transactions are sufficiently comparable for directional ratios.
-2. Pilot data can be hosted and processed in an approved Singapore SAP environment.
-3. Existing HANA views remain available or can be mapped to the canonical contract.
-4. Human investigators retain final authority and are available to review recommendations.
-5. The bank can provide authenticated workflow timestamps and fully loaded cost data for KPI validation.
-6. AI Core model availability, terms, and regional processing are approved by the bank.
-7. Any AI path influencing queue priority completes formal model validation.
-8. Regional rollout may require separate deployments, tokenisation domains, retention rules, and model approvals.
-9. Cost and time improvements are pilot targets, not guarantees.
-10. Demo analytics and synthetic histories are illustrative and are never mixed with live KPI claims.
+1. We assume our 12,000 annual alerts and 118,400 annual transactions are sufficiently comparable for directional ratios.
+2. We can host and process pilot data in an approved Singapore SAP environment.
+3. Our existing HANA views will remain available or can be mapped to the canonical contract.
+4. Our human investigators retain final authority and are available to review recommendations.
+5. We can provide authenticated workflow timestamps and fully loaded cost data for KPI validation.
+6. We will approve AI Core model availability, terms, and regional processing before use.
+7. We will complete formal validation for any AI path that influences queue priority.
+8. Our regional rollout may require separate deployments, tokenisation domains, retention rules, and model approvals.
+9. We treat cost and time improvements as pilot targets, not guarantees.
+10. We will keep illustrative demo analytics and synthetic histories separate from live KPI claims.
 
 ---
 
@@ -963,4 +964,4 @@ Production acceptance should additionally include integration, load, failover, p
 
 ## 20. One-sentence value proposition
 
-**RiskAssess turns fragmented financial-crime alerts into an explainable, privacy-minimised, SAP-powered priority queue and evidence pack so TrustSphere investigators can focus first on the cases with the greatest regulatory exposure—without surrendering human accountability.**
+**RiskAssess gives our investigators an explainable, privacy-minimised, SAP-powered priority queue and evidence pack so we can focus first on the cases with the greatest regulatory exposure—while I retain clear human accountability for our financial-crime control environment.**
